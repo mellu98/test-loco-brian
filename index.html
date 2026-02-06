@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="it">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0f172a" />
+    <title>Kanban PWA</title>
+    <link rel="manifest" href="manifest.json" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div>
+        <p class="eyebrow">La tua bacheca</p>
+        <h1>Kanban PWA</h1>
+      </div>
+      <button id="addTaskButton" class="primary">+ Aggiungi task</button>
+    </header>
+
+    <main class="board" aria-label="Bacheca kanban">
+      <section class="column" data-column="todo" aria-label="Da fare">
+        <h2>Da fare</h2>
+        <div class="task-list" data-list="todo"></div>
+      </section>
+      <section class="column" data-column="doing" aria-label="In corso">
+        <h2>In corso</h2>
+        <div class="task-list" data-list="doing"></div>
+      </section>
+      <section class="column" data-column="done" aria-label="Fatto">
+        <h2>Fatto</h2>
+        <div class="task-list" data-list="done"></div>
+      </section>
+    </main>
+
+    <dialog id="taskDialog" class="task-dialog">
+      <form id="taskForm" method="dialog">
+        <h3>Nuovo task</h3>
+        <label>
+          Titolo
+          <input id="taskTitle" name="title" type="text" maxlength="60" required />
+        </label>
+        <label>
+          Dettagli
+          <textarea id="taskDescription" name="description" rows="4" maxlength="240"></textarea>
+        </label>
+        <menu>
+          <button type="button" id="cancelTask">Annulla</button>
+          <button type="submit" class="primary">Salva</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <template id="taskTemplate">
+      <article class="task" draggable="true">
+        <header>
+          <h3 class="task-title"></h3>
+          <button class="ghost" data-action="delete" aria-label="Elimina task">✕</button>
+        </header>
+        <p class="task-desc"></p>
+        <footer>
+          <span class="badge" data-status="todo">Da fare</span>
+        </footer>
+      </article>
+    </template>
+
+    <script src="app.js"></script>
+  </body>
+</html>
