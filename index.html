@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#111827" />
+    <meta name="description" content="PromptForge PWA: migliora i tuoi prompt per ChatGPT 5.3 in modo strutturato." />
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="styles.css" />
+    <title>PromptForge AI · PWA</title>
+  </head>
+  <body>
+    <header class="app-header">
+      <h1>PromptForge AI</h1>
+      <p>Migliora i tuoi prompt per <strong>ChatGPT 5.3</strong> con una struttura professionale.</p>
+    </header>
+
+    <main class="container">
+      <section class="card">
+        <h2>1) Inserisci il tuo prompt di partenza</h2>
+        <label for="rawPrompt">Prompt iniziale</label>
+        <textarea id="rawPrompt" rows="5" placeholder="Es: Voglio un piano marketing per il lancio di un'app fitness..."></textarea>
+
+        <div class="grid two">
+          <div>
+            <label for="audience">Pubblico target</label>
+            <input id="audience" placeholder="Es: startup founder, studenti, PM" />
+          </div>
+          <div>
+            <label for="tone">Tono desiderato</label>
+            <select id="tone">
+              <option value="professionale">Professionale</option>
+              <option value="tecnico">Tecnico</option>
+              <option value="amichevole">Amichevole</option>
+              <option value="persuasivo">Persuasivo</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="grid two">
+          <div>
+            <label for="format">Formato output</label>
+            <select id="format">
+              <option value="bullet">Bullet points</option>
+              <option value="tabella">Tabella</option>
+              <option value="step-by-step">Step-by-step</option>
+              <option value="json">JSON strutturato</option>
+            </select>
+          </div>
+          <div>
+            <label for="length">Livello dettaglio</label>
+            <select id="length">
+              <option value="breve">Breve</option>
+              <option value="medio" selected>Medio</option>
+              <option value="approfondito">Approfondito</option>
+            </select>
+          </div>
+        </div>
+
+        <label for="constraints">Vincoli / requisiti</label>
+        <textarea id="constraints" rows="3" placeholder="Es: evita gergo, includi esempi pratici, max 300 parole"></textarea>
+
+        <label for="context">Contesto aggiuntivo</label>
+        <textarea id="context" rows="3" placeholder="Es: sto preparando una presentazione per investitori seed"></textarea>
+
+        <div class="actions">
+          <button id="generateBtn">Migliora prompt</button>
+          <button id="clearBtn" class="ghost">Reset</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>2) Prompt ottimizzato</h2>
+        <label for="improvedPrompt">Versione consigliata</label>
+        <textarea id="improvedPrompt" rows="12" readonly></textarea>
+
+        <div class="actions">
+          <button id="copyBtn">Copia prompt</button>
+          <button id="downloadBtn" class="ghost">Scarica .txt</button>
+        </div>
+
+        <h3>Checklist qualità</h3>
+        <ul id="qualityChecklist" class="checklist"></ul>
+      </section>
+    </main>
+
+    <footer class="app-footer">
+      <p>Installabile come app (PWA) • Funziona anche offline</p>
+    </footer>
+
+    <script src="app.js" defer></script>
+  </body>
+</html>
