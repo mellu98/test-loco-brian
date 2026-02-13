@@ -1,0 +1,18 @@
+{
+  "name": "PromptForge AI",
+  "short_name": "PromptForge",
+  "description": "Tool AI in PWA per migliorare i prompt per ChatGPT 5.3.",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#0b1020",
+  "theme_color": "#111827",
+  "lang": "it",
+  "icons": [
+    {
+      "src": "icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
