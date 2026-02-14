@@ -12,7 +12,7 @@ const MAX_PROMPT_LENGTH = Number(process.env.MAX_PROMPT_LENGTH || 6000);
 const DEFAULT_USE_WEB_SEARCH = process.env.OPENAI_USE_WEB_SEARCH === "true";
 const OPENAI_TIMEOUT_NO_WEB_MS = toPositiveInt(process.env.OPENAI_TIMEOUT_NO_WEB_MS, 18000);
 const OPENAI_TIMEOUT_WEB_SEARCH_MS = toPositiveInt(process.env.OPENAI_TIMEOUT_WEB_SEARCH_MS, 12000);
-const MAX_OUTPUT_TOKENS = toPositiveInt(process.env.MAX_OUTPUT_TOKENS, 700);
+const MAX_OUTPUT_TOKENS = toPositiveInt(process.env.MAX_OUTPUT_TOKENS, 0);
 
 const SYSTEM_INSTRUCTIONS = `
 Sei un Prompt Engineer senior.
@@ -76,16 +76,26 @@ app.post("/api/improve", async (req, res) => {
     }
 
     const result = await createImprovementResponse(prompt, useWebSearch);
+    let output = extractOutputText(result.response);
+    let recoveredFromEmptyOutput = false;
 
-    const output = extractOutputText(result.response);
     if (!output) {
-      return res.status(502).json({ error: "Risposta vuota dal modello." });
+      const retryResponse = await requestDirectTextFallback(prompt);
+      output = extractOutputText(retryResponse);
+      recoveredFromEmptyOutput = Boolean(output);
+    }
+
+    if (!output) {
+      return res.status(502).json({
+        error: "Risposta vuota dal modello dopo retry automatico. Riprova con un prompt piu corto."
+      });
     }
 
     return res.status(200).json({
       prompt: output,
       usedWebSearch: result.usedWebSearch,
-      fallbackToNoWebSearch: result.fallbackToNoWebSearch
+      fallbackToNoWebSearch: result.fallbackToNoWebSearch,
+      recoveredFromEmptyOutput
     });
   } catch (error) {
     if (isTimeoutError(error)) {
@@ -155,45 +165,90 @@ function extractOutputText(response) {
     return response.output_text.trim();
   }
 
+  if (
+    response &&
+    Array.isArray(response.output_text) &&
+    response.output_text.length > 0
+  ) {
+    const textFromArray = response.output_text
+      .map((part) => (typeof part === "string" ? part.trim() : ""))
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+    if (textFromArray) {
+      return textFromArray;
+    }
+  }
+
   if (!response || !Array.isArray(response.output)) {
-    return "";
+    return extractTextFromChoices(response);
   }
 
   const chunks = [];
   response.output.forEach((item) => {
+    if (typeof item?.text === "string" && item.text.trim()) {
+      chunks.push(item.text.trim());
+    }
+
+    if (typeof item?.content === "string" && item.content.trim()) {
+      chunks.push(item.content.trim());
+      return;
+    }
+
     if (!item || !Array.isArray(item.content)) {
       return;
     }
     item.content.forEach((part) => {
+      if (typeof part === "string" && part.trim()) {
+        chunks.push(part.trim());
+        return;
+      }
       if (typeof part?.text === "string" && part.text.trim()) {
         chunks.push(part.text.trim());
       }
     });
   });
 
+  const output = chunks.join("\n").trim();
+  if (output) {
+    return output;
+  }
+
+  return extractTextFromChoices(response);
+}
+
+function extractTextFromChoices(response) {
+  const choices = Array.isArray(response?.choices) ? response.choices : [];
+  if (choices.length === 0) {
+    return "";
+  }
+
+  const chunks = [];
+  choices.forEach((choice) => {
+    const content = choice?.message?.content;
+    if (typeof content === "string" && content.trim()) {
+      chunks.push(content.trim());
+      return;
+    }
+
+    if (Array.isArray(content)) {
+      content.forEach((part) => {
+        if (typeof part === "string" && part.trim()) {
+          chunks.push(part.trim());
+          return;
+        }
+        if (typeof part?.text === "string" && part.text.trim()) {
+          chunks.push(part.text.trim());
+        }
+      });
+    }
+  });
+
   return chunks.join("\n").trim();
 }
 
 async function createImprovementResponse(prompt, useWebSearch) {
-  const basePayload = {
-    model: MODEL_NAME,
-    max_output_tokens: MAX_OUTPUT_TOKENS,
-    input: [
-      {
-        role: "system",
-        content: [{ type: "input_text", text: SYSTEM_INSTRUCTIONS }]
-      },
-      {
-        role: "user",
-        content: [
-          {
-            type: "input_text",
-            text: `Migliora questo prompt rendendolo specifico e operativo:\n\n${prompt}`
-          }
-        ]
-      }
-    ]
-  };
+  const basePayload = buildBasePayload(prompt);
 
   if (!useWebSearch) {
     return {
@@ -226,6 +281,49 @@ async function createImprovementResponse(prompt, useWebSearch) {
     }
     throw error;
   }
+}
+
+function buildBasePayload(prompt, userInstructionText) {
+  const payload = {
+    model: MODEL_NAME,
+    input: [
+      {
+        role: "system",
+        content: [{ type: "input_text", text: SYSTEM_INSTRUCTIONS }]
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: userInstructionText || `Migliora questo prompt rendendolo specifico e operativo:\n\n${prompt}`
+          }
+        ]
+      }
+    ]
+  };
+
+  if (MAX_OUTPUT_TOKENS > 0) {
+    payload.max_output_tokens = MAX_OUTPUT_TOKENS;
+  }
+
+  return payload;
+}
+
+async function requestDirectTextFallback(prompt) {
+  const retryInstruction = [
+    "Genera direttamente il prompt finale ottimizzato in testo semplice.",
+    "Nessuna spiegazione extra.",
+    "",
+    "Prompt di partenza:",
+    prompt
+  ].join("\n");
+
+  return requestOpenAI(
+    buildBasePayload(prompt, retryInstruction),
+    OPENAI_TIMEOUT_NO_WEB_MS,
+    "OpenAI retry-empty-output"
+  );
 }
 
 function isWebSearchUnsupported(error) {

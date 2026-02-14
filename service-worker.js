@@ -1,6 +1,6 @@
 "use strict";
 
-const CACHE_NAME = "prompt-forge-cache-v2";
+const CACHE_NAME = "prompt-forge-cache-v3";
 const APP_SHELL_FILES = [
   "/",
   "/index.html",
@@ -52,6 +52,17 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
+  const path = url.pathname.toLowerCase();
+  if (
+    path === "/app.js" ||
+    path === "/styles.css" ||
+    path === "/manifest.webmanifest" ||
+    path === "/index.html"
+  ) {
+    event.respondWith(staleWhileRevalidate(request));
+    return;
+  }
+
   event.respondWith(cacheFirst(request));
 });
 
@@ -80,4 +91,27 @@ async function cacheFirst(request) {
   const networkResponse = await fetch(request);
   cache.put(request, networkResponse.clone());
   return networkResponse;
+}
+
+async function staleWhileRevalidate(request) {
+  const cache = await caches.open(CACHE_NAME);
+  const cached = await cache.match(request);
+
+  const networkPromise = fetch(request)
+    .then((networkResponse) => {
+      cache.put(request, networkResponse.clone());
+      return networkResponse;
+    })
+    .catch(() => null);
+
+  if (cached) {
+    return cached;
+  }
+
+  const networkResponse = await networkPromise;
+  if (networkResponse) {
+    return networkResponse;
+  }
+
+  return cache.match("/index.html");
 }

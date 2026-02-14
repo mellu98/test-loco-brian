@@ -59,6 +59,8 @@ async function improvePrompt() {
     resultNode.textContent = result.prompt;
     if (result.fallbackToNoWebSearch) {
       setStatus("Web research lenta/non disponibile: completato senza ricerca web.", false);
+    } else if (result.recoveredFromEmptyOutput) {
+      setStatus("Il modello ha risposto vuoto al primo tentativo: retry automatico completato.", false);
     } else if (result.usedWebSearch) {
       setStatus("Prompt ottimizzato con web research.", false);
     } else {
@@ -104,7 +106,8 @@ async function improveViaBackend(rawPrompt, useWebSearch) {
   return {
     prompt: output,
     usedWebSearch: Boolean(data?.usedWebSearch),
-    fallbackToNoWebSearch: Boolean(data?.fallbackToNoWebSearch)
+    fallbackToNoWebSearch: Boolean(data?.fallbackToNoWebSearch),
+    recoveredFromEmptyOutput: Boolean(data?.recoveredFromEmptyOutput)
   };
 }
 

@@ -25,7 +25,7 @@ App web semplice: incolli un prompt grezzo, il backend lo passa a ChatGPT e rest
 - `OPENAI_USE_WEB_SEARCH`: default server se il toggle UI non viene inviato, default `false`
 - `OPENAI_TIMEOUT_NO_WEB_MS`: timeout richieste senza web research, default `18000`
 - `OPENAI_TIMEOUT_WEB_SEARCH_MS`: timeout richieste con web research, default `12000`
-- `MAX_OUTPUT_TOKENS`: limita la lunghezza output per ridurre latenza, default `700`
+- `MAX_OUTPUT_TOKENS`: limita la lunghezza output per ridurre latenza. `0` = nessun limite (default `0`)
 - `MAX_PROMPT_LENGTH`: opzionale, default `6000`
 - `PORT`: opzionale, default `3000`
 
