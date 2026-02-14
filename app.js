@@ -1,0 +1,145 @@
+"use strict";
+
+const INPUT_STORAGE_KEY = "prompt_forge_single_input_v3";
+const DEFAULT_RESULT = "Il prompt ottimizzato apparira qui.";
+
+const form = document.getElementById("prompt-form");
+const rawPromptInput = document.getElementById("raw-prompt");
+const resultNode = document.getElementById("result");
+const statusNode = document.getElementById("status");
+
+const generateBtn = document.getElementById("generate-btn");
+const copyBtn = document.getElementById("copy-btn");
+const clearBtn = document.getElementById("clear-btn");
+
+copyBtn.addEventListener("click", onCopy);
+clearBtn.addEventListener("click", onClear);
+
+form.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  await improvePrompt();
+});
+
+rawPromptInput.addEventListener("input", () => {
+  localStorage.setItem(INPUT_STORAGE_KEY, rawPromptInput.value);
+});
+
+restoreDraft();
+
+async function improvePrompt() {
+  const rawPrompt = normalizePrompt(rawPromptInput.value);
+  if (!rawPrompt) {
+    setStatus("Inserisci un prompt.", true);
+    rawPromptInput.focus();
+    return;
+  }
+
+  setBusy(true);
+  setStatus("Ottimizzo con ChatGPT...", false);
+
+  try {
+    const optimized = await improveViaBackend(rawPrompt);
+    resultNode.textContent = optimized;
+    setStatus("Prompt ottimizzato.", false);
+  } catch (error) {
+    setStatus(`Errore: ${error.message}`, true);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function improveViaBackend(rawPrompt) {
+  const response = await fetch("/api/improve", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt: rawPrompt })
+  });
+
+  if (!response.ok) {
+    throw new Error(await readApiError(response));
+  }
+
+  const data = await response.json();
+  const output = typeof data?.prompt === "string" ? data.prompt.trim() : "";
+  if (!output) {
+    throw new Error("Risposta vuota dal server.");
+  }
+  return output;
+}
+
+async function readApiError(response) {
+  if (response.status === 405) {
+    return "HTTP 405: endpoint non configurato per POST. Probabile deploy come sito statico invece di Web Service Node.";
+  }
+
+  try {
+    const payload = await response.json();
+    const message = payload?.error || payload?.message;
+    if (typeof message === "string" && message.trim()) {
+      return message;
+    }
+    return `HTTP ${response.status}`;
+  } catch (_error) {
+    return `HTTP ${response.status}`;
+  }
+}
+
+async function onCopy() {
+  const text = resultNode.textContent.trim();
+  if (!text || text === DEFAULT_RESULT) {
+    setStatus("Nessun risultato da copiare.", true);
+    return;
+  }
+
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const selection = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(resultNode);
+      selection.removeAllRanges();
+      selection.addRange(range);
+      document.execCommand("copy");
+      selection.removeAllRanges();
+    }
+    setStatus("Risultato copiato.", false);
+  } catch (_error) {
+    setStatus("Copia non riuscita.", true);
+  }
+}
+
+function onClear() {
+  rawPromptInput.value = "";
+  resultNode.textContent = DEFAULT_RESULT;
+  localStorage.removeItem(INPUT_STORAGE_KEY);
+  setStatus("Pulito.", false);
+}
+
+function restoreDraft() {
+  const draft = localStorage.getItem(INPUT_STORAGE_KEY);
+  if (!draft) {
+    return;
+  }
+  rawPromptInput.value = draft;
+  setStatus("Bozza ripristinata.", false);
+}
+
+function normalizePrompt(value) {
+  return value
+    .replace(/\r\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function setStatus(message, isError) {
+  statusNode.textContent = message;
+  statusNode.classList.toggle("status-error", isError);
+  statusNode.classList.toggle("status-ok", !isError);
+}
+
+function setBusy(isBusy) {
+  [generateBtn, copyBtn, clearBtn].forEach((button) => {
+    button.disabled = isBusy;
+  });
+}

@@ -1,0 +1,174 @@
+@import url("https://fonts.googleapis.com/css2?family=Chivo:wght@400;600;800&family=IBM+Plex+Mono:wght@500&display=swap");
+
+:root {
+  --bg-0: #fff7ed;
+  --bg-1: #fee2e2;
+  --ink: #111827;
+  --ink-soft: #4b5563;
+  --line: #fed7aa;
+  --brand: #ea580c;
+  --brand-2: #c2410c;
+  --success: #15803d;
+  --danger: #b91c1c;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  font-family: "Chivo", "Segoe UI", sans-serif;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at 10% 10%, #fed7aa 0%, transparent 42%),
+    radial-gradient(circle at 85% 20%, #fecaca 0%, transparent 35%),
+    linear-gradient(150deg, var(--bg-0), var(--bg-1));
+}
+
+.page-shell {
+  width: min(820px, 94vw);
+  margin: 1.8rem auto;
+}
+
+.panel {
+  background: linear-gradient(170deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.68));
+  border: 1px solid rgba(251, 146, 60, 0.4);
+  border-radius: 16px;
+  box-shadow: 0 20px 36px rgba(124, 45, 18, 0.12);
+  padding: 1rem;
+}
+
+.panel-header h1 {
+  margin: 0.15rem 0 0.35rem;
+  font-size: clamp(1.6rem, 3vw, 2.1rem);
+}
+
+.eyebrow {
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.78rem;
+  color: var(--brand-2);
+  font-weight: 800;
+}
+
+.subtitle {
+  margin: 0 0 1rem;
+  color: var(--ink-soft);
+}
+
+.field {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.field span {
+  font-weight: 600;
+}
+
+textarea,
+button {
+  font: inherit;
+}
+
+#raw-prompt {
+  width: 100%;
+  min-height: 180px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.96);
+  color: var(--ink);
+  border-radius: 12px;
+  padding: 0.68rem 0.75rem;
+  outline: none;
+  resize: vertical;
+}
+
+#raw-prompt:focus {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px rgba(234, 88, 12, 0.16);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-top: 0.7rem;
+}
+
+button {
+  border: 0;
+  border-radius: 12px;
+  background: linear-gradient(135deg, var(--brand), var(--brand-2));
+  color: #fff;
+  font-weight: 700;
+  padding: 0.6rem 0.92rem;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+button.ghost {
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+
+.result {
+  margin-top: 1rem;
+  padding-top: 0.8rem;
+  border-top: 1px dashed var(--line);
+}
+
+.result-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+}
+
+.result h2 {
+  margin: 0 0 0.45rem;
+}
+
+#status {
+  margin: 0;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+}
+
+.result-box {
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.95);
+  padding: 0.85rem;
+  min-height: 210px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: "IBM Plex Mono", monospace;
+  line-height: 1.42;
+}
+
+.status-ok {
+  color: var(--success) !important;
+}
+
+.status-error {
+  color: var(--danger) !important;
+}
+
+@media (max-width: 760px) {
+  .page-shell {
+    margin: 1rem auto;
+  }
+}

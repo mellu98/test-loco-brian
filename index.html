@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="prompt-api-base" content="">
+  <title>Prompt Forge</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <main class="page-shell">
+    <section class="panel">
+      <header class="panel-header">
+        <p class="eyebrow">Prompt Generator</p>
+        <h1>Prompt Forge</h1>
+        <p class="subtitle">Scrivi il tuo prompt grezzo e premi "Rendi perfetto". La chiave API resta sul server, non nel browser.</p>
+      </header>
+
+      <form id="prompt-form" novalidate>
+        <label class="field">
+          <span>Prompt da migliorare</span>
+          <textarea id="raw-prompt" rows="8" placeholder="Es: scrivimi un piano marketing per il lancio di un'app fitness"></textarea>
+        </label>
+        <div class="actions">
+          <button id="generate-btn" type="submit">Rendi perfetto</button>
+          <button id="copy-btn" type="button" class="ghost">Copia risultato</button>
+          <button id="clear-btn" type="button" class="ghost">Pulisci</button>
+        </div>
+      </form>
+
+      <section class="result">
+        <div class="result-head">
+          <h2>Prompt finale</h2>
+          <p id="status" aria-live="polite"></p>
+        </div>
+        <pre id="result" class="result-box">Il prompt ottimizzato apparira qui.</pre>
+      </section>
+    </section>
+  </main>
+</body>
+</html>
