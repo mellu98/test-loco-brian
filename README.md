@@ -22,10 +22,18 @@ App web semplice: incolli un prompt grezzo, il backend lo passa a ChatGPT e rest
 
 - `OPENAI_API_KEY`: obbligatoria
 - `OPENAI_MODEL`: opzionale, default `gpt-5`
-- `OPENAI_USE_WEB_SEARCH`: opzionale, default `false` (piu veloce)
-- `OPENAI_REQUEST_TIMEOUT_MS`: opzionale, default `35000`
+- `OPENAI_USE_WEB_SEARCH`: default server se il toggle UI non viene inviato, default `false`
+- `OPENAI_TIMEOUT_NO_WEB_MS`: timeout richieste senza web research, default `18000`
+- `OPENAI_TIMEOUT_WEB_SEARCH_MS`: timeout richieste con web research, default `12000`
+- `MAX_OUTPUT_TOKENS`: limita la lunghezza output per ridurre latenza, default `700`
 - `MAX_PROMPT_LENGTH`: opzionale, default `6000`
 - `PORT`: opzionale, default `3000`
+
+## Web Research (toggle)
+
+- Nel form trovi il toggle `Usa web research`.
+- Toggle OFF: modalita piu veloce.
+- Toggle ON: prova prima con ricerca web e, se lenta/non supportata, fa fallback automatico senza web research.
 
 ## Deploy online (Render)
 
@@ -39,6 +47,8 @@ App web semplice: incolli un prompt grezzo, il backend lo passa a ChatGPT e rest
 5. In `Environment Variables` aggiungi:
    - `OPENAI_API_KEY` = tua chiave OpenAI
    - `OPENAI_MODEL` = `gpt-5` (opzionale)
+   - `OPENAI_TIMEOUT_NO_WEB_MS` = `18000` (opzionale)
+   - `OPENAI_TIMEOUT_WEB_SEARCH_MS` = `12000` (opzionale)
 6. Deploy.
 7. Condividi l'URL Render (es. `https://tuo-progetto.onrender.com`) con il tuo amico.
 

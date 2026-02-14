@@ -9,8 +9,10 @@ const app = express();
 const PORT = Number(process.env.PORT || 3000);
 const MODEL_NAME = process.env.OPENAI_MODEL || "gpt-5";
 const MAX_PROMPT_LENGTH = Number(process.env.MAX_PROMPT_LENGTH || 6000);
-const USE_WEB_SEARCH = process.env.OPENAI_USE_WEB_SEARCH === "true";
-const OPENAI_REQUEST_TIMEOUT_MS = Number(process.env.OPENAI_REQUEST_TIMEOUT_MS || 35000);
+const DEFAULT_USE_WEB_SEARCH = process.env.OPENAI_USE_WEB_SEARCH === "true";
+const OPENAI_TIMEOUT_NO_WEB_MS = toPositiveInt(process.env.OPENAI_TIMEOUT_NO_WEB_MS, 18000);
+const OPENAI_TIMEOUT_WEB_SEARCH_MS = toPositiveInt(process.env.OPENAI_TIMEOUT_WEB_SEARCH_MS, 12000);
+const MAX_OUTPUT_TOKENS = toPositiveInt(process.env.MAX_OUTPUT_TOKENS, 700);
 
 const SYSTEM_INSTRUCTIONS = `
 Sei un Prompt Engineer senior.
@@ -62,6 +64,7 @@ app.post("/api/improve", async (req, res) => {
     }
 
     const prompt = normalizePrompt(req.body?.prompt);
+    const useWebSearch = parseUseWebSearch(req.body?.useWebSearch, DEFAULT_USE_WEB_SEARCH);
     if (!prompt) {
       return res.status(400).json({ error: "Il campo prompt e obbligatorio." });
     }
@@ -72,18 +75,24 @@ app.post("/api/improve", async (req, res) => {
       });
     }
 
-    const response = await createImprovementResponse(prompt);
+    const result = await createImprovementResponse(prompt, useWebSearch);
 
-    const output = extractOutputText(response);
+    const output = extractOutputText(result.response);
     if (!output) {
       return res.status(502).json({ error: "Risposta vuota dal modello." });
     }
 
-    return res.status(200).json({ prompt: output });
+    return res.status(200).json({
+      prompt: output,
+      usedWebSearch: result.usedWebSearch,
+      fallbackToNoWebSearch: result.fallbackToNoWebSearch
+    });
   } catch (error) {
     if (isTimeoutError(error)) {
+      const timeoutMs = Number(error?.timeoutMs) || OPENAI_TIMEOUT_NO_WEB_MS;
+      const label = typeof error?.label === "string" ? error.label : "OpenAI";
       return res.status(504).json({
-        error: `Timeout OpenAI dopo ${OPENAI_REQUEST_TIMEOUT_MS}ms. Riprova o abilita/disabilita OPENAI_USE_WEB_SEARCH.`
+        error: `Timeout ${label} dopo ${timeoutMs}ms. Riprova senza web research o riduci il prompt.`
       });
     }
 
@@ -115,6 +124,32 @@ function normalizePrompt(value) {
     .trim();
 }
 
+function parseUseWebSearch(value, fallbackValue) {
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["true", "1", "yes", "on"].includes(normalized)) {
+      return true;
+    }
+    if (["false", "0", "no", "off"].includes(normalized)) {
+      return false;
+    }
+  }
+
+  return fallbackValue;
+}
+
+function toPositiveInt(value, fallbackValue) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallbackValue;
+  }
+  return Math.floor(parsed);
+}
+
 function extractOutputText(response) {
   if (response && typeof response.output_text === "string" && response.output_text.trim()) {
     return response.output_text.trim();
@@ -139,9 +174,10 @@ function extractOutputText(response) {
   return chunks.join("\n").trim();
 }
 
-async function createImprovementResponse(prompt) {
+async function createImprovementResponse(prompt, useWebSearch) {
   const basePayload = {
     model: MODEL_NAME,
+    max_output_tokens: MAX_OUTPUT_TOKENS,
     input: [
       {
         role: "system",
@@ -159,18 +195,34 @@ async function createImprovementResponse(prompt) {
     ]
   };
 
-  if (!USE_WEB_SEARCH) {
-    return requestOpenAI(basePayload);
+  if (!useWebSearch) {
+    return {
+      response: await requestOpenAI(basePayload, OPENAI_TIMEOUT_NO_WEB_MS, "OpenAI"),
+      usedWebSearch: false,
+      fallbackToNoWebSearch: false
+    };
   }
 
   try {
-    return await requestOpenAI({
-      ...basePayload,
-      tools: [{ type: "web_search" }]
-    });
+    return {
+      response: await requestOpenAI(
+        {
+          ...basePayload,
+          tools: [{ type: "web_search" }]
+        },
+        OPENAI_TIMEOUT_WEB_SEARCH_MS,
+        "OpenAI+web_search"
+      ),
+      usedWebSearch: true,
+      fallbackToNoWebSearch: false
+    };
   } catch (error) {
     if (isWebSearchUnsupported(error) || isTimeoutError(error)) {
-      return requestOpenAI(basePayload);
+      return {
+        response: await requestOpenAI(basePayload, OPENAI_TIMEOUT_NO_WEB_MS, "OpenAI fallback"),
+        usedWebSearch: false,
+        fallbackToNoWebSearch: true
+      };
     }
     throw error;
   }
@@ -185,11 +237,16 @@ function isWebSearchUnsupported(error) {
 }
 
 function isTimeoutError(error) {
-  return error?.code === "TIMEOUT";
+  const message = String(error?.message || "").toLowerCase();
+  return (
+    error?.code === "TIMEOUT" ||
+    message.includes("timeout") ||
+    message.includes("timed out")
+  );
 }
 
-async function requestOpenAI(payload) {
-  return withTimeout(openai.responses.create(payload), OPENAI_REQUEST_TIMEOUT_MS, "OpenAI");
+async function requestOpenAI(payload, timeoutMs, label) {
+  return withTimeout(openai.responses.create(payload), timeoutMs, label);
 }
 
 async function withTimeout(promise, timeoutMs, label) {
@@ -198,6 +255,8 @@ async function withTimeout(promise, timeoutMs, label) {
     timeoutHandle = setTimeout(() => {
       const timeoutError = new Error(`${label} timeout (${timeoutMs}ms)`);
       timeoutError.code = "TIMEOUT";
+      timeoutError.timeoutMs = timeoutMs;
+      timeoutError.label = label;
       reject(timeoutError);
     }, timeoutMs);
   });

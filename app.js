@@ -1,8 +1,9 @@
 "use strict";
 
 const INPUT_STORAGE_KEY = "prompt_forge_single_input_v3";
+const WEB_SEARCH_STORAGE_KEY = "prompt_forge_use_web_search_v1";
 const DEFAULT_RESULT = "Il prompt ottimizzato apparira qui.";
-const BACKEND_TIMEOUT_MS = 70000;
+const BACKEND_TIMEOUT_MS = 32000;
 
 const form = document.getElementById("prompt-form");
 const rawPromptInput = document.getElementById("raw-prompt");
@@ -12,6 +13,7 @@ const statusNode = document.getElementById("status");
 const generateBtn = document.getElementById("generate-btn");
 const copyBtn = document.getElementById("copy-btn");
 const clearBtn = document.getElementById("clear-btn");
+const useWebSearchInput = document.getElementById("use-web-search");
 
 copyBtn.addEventListener("click", onCopy);
 clearBtn.addEventListener("click", onClear);
@@ -25,11 +27,19 @@ rawPromptInput.addEventListener("input", () => {
   localStorage.setItem(INPUT_STORAGE_KEY, rawPromptInput.value);
 });
 
+if (useWebSearchInput) {
+  useWebSearchInput.addEventListener("change", () => {
+    localStorage.setItem(WEB_SEARCH_STORAGE_KEY, useWebSearchInput.checked ? "1" : "0");
+  });
+}
+
 restoreDraft();
+restoreWebSearchPreference();
 registerServiceWorker();
 
 async function improvePrompt() {
   const rawPrompt = normalizePrompt(rawPromptInput.value);
+  const requestedWebSearch = Boolean(useWebSearchInput?.checked);
   if (!rawPrompt) {
     setStatus("Inserisci un prompt.", true);
     rawPromptInput.focus();
@@ -37,12 +47,23 @@ async function improvePrompt() {
   }
 
   setBusy(true);
-  setStatus("Ottimizzo con ChatGPT...", false);
+  setStatus(
+    requestedWebSearch
+      ? "Ottimizzo con ChatGPT + web research..."
+      : "Ottimizzo con ChatGPT (modalita veloce)...",
+    false
+  );
 
   try {
-    const optimized = await improveViaBackend(rawPrompt);
-    resultNode.textContent = optimized;
-    setStatus("Prompt ottimizzato.", false);
+    const result = await improveViaBackend(rawPrompt, requestedWebSearch);
+    resultNode.textContent = result.prompt;
+    if (result.fallbackToNoWebSearch) {
+      setStatus("Web research lenta/non disponibile: completato senza ricerca web.", false);
+    } else if (result.usedWebSearch) {
+      setStatus("Prompt ottimizzato con web research.", false);
+    } else {
+      setStatus("Prompt ottimizzato (modalita veloce).", false);
+    }
   } catch (error) {
     setStatus(`Errore: ${error.message}`, true);
   } finally {
@@ -50,7 +71,7 @@ async function improvePrompt() {
   }
 }
 
-async function improveViaBackend(rawPrompt) {
+async function improveViaBackend(rawPrompt, useWebSearch) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), BACKEND_TIMEOUT_MS);
   let response;
@@ -59,7 +80,7 @@ async function improveViaBackend(rawPrompt) {
     response = await fetch("/api/improve", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt: rawPrompt }),
+      body: JSON.stringify({ prompt: rawPrompt, useWebSearch }),
       signal: controller.signal
     });
   } catch (error) {
@@ -80,7 +101,11 @@ async function improveViaBackend(rawPrompt) {
   if (!output) {
     throw new Error("Risposta vuota dal server.");
   }
-  return output;
+  return {
+    prompt: output,
+    usedWebSearch: Boolean(data?.usedWebSearch),
+    fallbackToNoWebSearch: Boolean(data?.fallbackToNoWebSearch)
+  };
 }
 
 async function readApiError(response) {
@@ -141,6 +166,17 @@ function restoreDraft() {
   setStatus("Bozza ripristinata.", false);
 }
 
+function restoreWebSearchPreference() {
+  if (!useWebSearchInput) {
+    return;
+  }
+
+  const savedValue = localStorage.getItem(WEB_SEARCH_STORAGE_KEY);
+  if (savedValue === "1") {
+    useWebSearchInput.checked = true;
+  }
+}
+
 function normalizePrompt(value) {
   return value
     .replace(/\r\n/g, "\n")
@@ -155,8 +191,11 @@ function setStatus(message, isError) {
 }
 
 function setBusy(isBusy) {
-  [generateBtn, copyBtn, clearBtn].forEach((button) => {
-    button.disabled = isBusy;
+  [generateBtn, copyBtn, clearBtn, useWebSearchInput].forEach((control) => {
+    if (!control) {
+      return;
+    }
+    control.disabled = isBusy;
   });
 }
 
