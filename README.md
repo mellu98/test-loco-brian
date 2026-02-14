@@ -22,7 +22,8 @@ App web semplice: incolli un prompt grezzo, il backend lo passa a ChatGPT e rest
 
 - `OPENAI_API_KEY`: obbligatoria
 - `OPENAI_MODEL`: opzionale, default `gpt-5`
-- `OPENAI_USE_WEB_SEARCH`: opzionale, default `true`
+- `OPENAI_USE_WEB_SEARCH`: opzionale, default `false` (piu veloce)
+- `OPENAI_REQUEST_TIMEOUT_MS`: opzionale, default `35000`
 - `MAX_PROMPT_LENGTH`: opzionale, default `6000`
 - `PORT`: opzionale, default `3000`
 
@@ -40,6 +41,21 @@ App web semplice: incolli un prompt grezzo, il backend lo passa a ChatGPT e rest
    - `OPENAI_MODEL` = `gpt-5` (opzionale)
 6. Deploy.
 7. Condividi l'URL Render (es. `https://tuo-progetto.onrender.com`) con il tuo amico.
+
+## Installazione PWA su telefono
+
+L'app ora e configurata come PWA installabile.
+
+- Android (Chrome):
+  1. Apri l'URL HTTPS dell'app.
+  2. Tocca menu browser -> `Installa app` (o `Aggiungi a schermata Home`).
+- iPhone (Safari):
+  1. Apri l'URL HTTPS dell'app.
+  2. Tocca Condividi -> `Aggiungi alla schermata Home`.
+
+Note importanti:
+- Per installazione su telefono serve `https://` (tranne `http://localhost` in locale).
+- Dopo modifiche PWA, se non vedi subito gli aggiornamenti, chiudi e riapri l'app installata.
 
 ## Note sicurezza
 

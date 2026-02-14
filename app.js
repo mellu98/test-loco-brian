@@ -2,6 +2,7 @@
 
 const INPUT_STORAGE_KEY = "prompt_forge_single_input_v3";
 const DEFAULT_RESULT = "Il prompt ottimizzato apparira qui.";
+const BACKEND_TIMEOUT_MS = 70000;
 
 const form = document.getElementById("prompt-form");
 const rawPromptInput = document.getElementById("raw-prompt");
@@ -25,6 +26,7 @@ rawPromptInput.addEventListener("input", () => {
 });
 
 restoreDraft();
+registerServiceWorker();
 
 async function improvePrompt() {
   const rawPrompt = normalizePrompt(rawPromptInput.value);
@@ -49,11 +51,25 @@ async function improvePrompt() {
 }
 
 async function improveViaBackend(rawPrompt) {
-  const response = await fetch("/api/improve", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ prompt: rawPrompt })
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), BACKEND_TIMEOUT_MS);
+  let response;
+
+  try {
+    response = await fetch("/api/improve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: rawPrompt }),
+      signal: controller.signal
+    });
+  } catch (error) {
+    if (error && error.name === "AbortError") {
+      throw new Error("Timeout: il server ha impiegato troppo tempo a rispondere.");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   if (!response.ok) {
     throw new Error(await readApiError(response));
@@ -141,5 +157,19 @@ function setStatus(message, isError) {
 function setBusy(isBusy) {
   [generateBtn, copyBtn, clearBtn].forEach((button) => {
     button.disabled = isBusy;
+  });
+}
+
+function registerServiceWorker() {
+  if (!("serviceWorker" in navigator)) {
+    return;
+  }
+
+  window.addEventListener("load", () => {
+    navigator.serviceWorker
+      .register("/service-worker.js")
+      .catch((error) => {
+        console.warn("Service Worker non registrato:", error);
+      });
   });
 }

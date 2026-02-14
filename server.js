@@ -9,7 +9,8 @@ const app = express();
 const PORT = Number(process.env.PORT || 3000);
 const MODEL_NAME = process.env.OPENAI_MODEL || "gpt-5";
 const MAX_PROMPT_LENGTH = Number(process.env.MAX_PROMPT_LENGTH || 6000);
-const USE_WEB_SEARCH = process.env.OPENAI_USE_WEB_SEARCH !== "false";
+const USE_WEB_SEARCH = process.env.OPENAI_USE_WEB_SEARCH === "true";
+const OPENAI_REQUEST_TIMEOUT_MS = Number(process.env.OPENAI_REQUEST_TIMEOUT_MS || 35000);
 
 const SYSTEM_INSTRUCTIONS = `
 Sei un Prompt Engineer senior.
@@ -45,17 +46,12 @@ app.get("/health", (_req, res) => {
   res.status(200).json({ ok: true });
 });
 
-app.get("/", (_req, res) => {
-  res.sendFile(path.join(__dirname, "index.html"));
+app.get("/service-worker.js", (_req, res) => {
+  res.set("Cache-Control", "no-cache");
+  res.sendFile(path.join(__dirname, "service-worker.js"));
 });
 
-app.get("/app.js", (_req, res) => {
-  res.sendFile(path.join(__dirname, "app.js"));
-});
-
-app.get("/styles.css", (_req, res) => {
-  res.sendFile(path.join(__dirname, "styles.css"));
-});
+app.use(express.static(path.join(__dirname)));
 
 app.post("/api/improve", async (req, res) => {
   try {
@@ -85,6 +81,12 @@ app.post("/api/improve", async (req, res) => {
 
     return res.status(200).json({ prompt: output });
   } catch (error) {
+    if (isTimeoutError(error)) {
+      return res.status(504).json({
+        error: `Timeout OpenAI dopo ${OPENAI_REQUEST_TIMEOUT_MS}ms. Riprova o abilita/disabilita OPENAI_USE_WEB_SEARCH.`
+      });
+    }
+
     const status = Number(error?.status) || 502;
     const message = typeof error?.message === "string" ? error.message : "Errore chiamata OpenAI.";
     return res.status(status).json({ error: message });
@@ -158,17 +160,17 @@ async function createImprovementResponse(prompt) {
   };
 
   if (!USE_WEB_SEARCH) {
-    return openai.responses.create(basePayload);
+    return requestOpenAI(basePayload);
   }
 
   try {
-    return await openai.responses.create({
+    return await requestOpenAI({
       ...basePayload,
       tools: [{ type: "web_search" }]
     });
   } catch (error) {
-    if (isWebSearchUnsupported(error)) {
-      return openai.responses.create(basePayload);
+    if (isWebSearchUnsupported(error) || isTimeoutError(error)) {
+      return requestOpenAI(basePayload);
     }
     throw error;
   }
@@ -180,4 +182,29 @@ function isWebSearchUnsupported(error) {
     message.includes("web_search") &&
     (message.includes("unsupported") || message.includes("invalid"))
   );
+}
+
+function isTimeoutError(error) {
+  return error?.code === "TIMEOUT";
+}
+
+async function requestOpenAI(payload) {
+  return withTimeout(openai.responses.create(payload), OPENAI_REQUEST_TIMEOUT_MS, "OpenAI");
+}
+
+async function withTimeout(promise, timeoutMs, label) {
+  let timeoutHandle;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutHandle = setTimeout(() => {
+      const timeoutError = new Error(`${label} timeout (${timeoutMs}ms)`);
+      timeoutError.code = "TIMEOUT";
+      reject(timeoutError);
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
 }
