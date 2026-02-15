@@ -42,7 +42,9 @@ async function improvePrompt() {
   try {
     const result = await improveViaBackend(rawPrompt);
     resultNode.textContent = result.prompt;
-    if (result.recoveredFromEmptyOutput) {
+    if (result.usedLocalFallback) {
+      setStatus("Output generato con fallback locale per evitare risposta vuota del modello.", false);
+    } else if (result.recoveredFromEmptyOutput) {
       setStatus("Il modello ha risposto vuoto al primo tentativo: retry automatico completato.", false);
     } else {
       setStatus("Prompt ottimizzato con web research.", false);
@@ -86,7 +88,8 @@ async function improveViaBackend(rawPrompt) {
   }
   return {
     prompt: output,
-    recoveredFromEmptyOutput: Boolean(data?.recoveredFromEmptyOutput)
+    recoveredFromEmptyOutput: Boolean(data?.recoveredFromEmptyOutput),
+    usedLocalFallback: Boolean(data?.usedLocalFallback)
   };
 }
 

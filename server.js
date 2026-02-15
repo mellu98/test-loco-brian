@@ -58,6 +58,7 @@ app.get("/service-worker.js", (_req, res) => {
 app.use(express.static(path.join(__dirname)));
 
 app.post("/api/improve", async (req, res) => {
+  let prompt = "";
   try {
     if (!openai) {
       return res.status(500).json({
@@ -65,7 +66,7 @@ app.post("/api/improve", async (req, res) => {
       });
     }
 
-    const prompt = normalizePrompt(req.body?.prompt);
+    prompt = normalizePrompt(req.body?.prompt);
     if (!prompt) {
       return res.status(400).json({ error: "Il campo prompt e obbligatorio." });
     }
@@ -112,9 +113,12 @@ app.post("/api/improve", async (req, res) => {
         return res.status(422).json({ error: refusal });
       }
 
-      return res.status(502).json({
-        error:
-          "Risposta vuota dal modello dopo retry automatico. Riprova o aumenta MAX_OUTPUT_TOKENS.",
+      return res.status(200).json({
+        prompt: buildLocalFallbackPrompt(prompt),
+        recoveredFromEmptyOutput: true,
+        usedWebSearch: true,
+        usedModel: MODEL_NAME,
+        usedLocalFallback: true,
         debug: finalDebug
       });
     }
@@ -328,6 +332,29 @@ function buildResponseDebugInfo(response) {
     has_output_text: Boolean(hasOutputText),
     has_refusal: Boolean(hasRefusal)
   };
+}
+
+function buildLocalFallbackPrompt(userPrompt) {
+  const concisePrompt = String(userPrompt || "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return [
+    "Ruolo: Sei un assistente esperto e pragmatico.",
+    "Obiettivo: Fornire una risposta utile, concreta e immediatamente applicabile alla richiesta dell'utente.",
+    `Richiesta utente: ${concisePrompt}`,
+    "Contesto: Se il tema riguarda salute, alimentazione o fitness, evita prescrizioni mediche e invita a verificare con professionisti qualificati.",
+    "Vincoli di qualita:",
+    "- Linguaggio chiaro e in italiano.",
+    "- Soluzione in passi numerati.",
+    "- Evidenzia assunzioni e limiti.",
+    "- Evita invenzioni non verificabili.",
+    "Formato output richiesto:",
+    "1. Sintesi in 2-3 righe",
+    "2. Piano pratico step-by-step",
+    "3. Checklist finale",
+    "Domande chiarificatrici (max 3) solo se strettamente necessarie."
+  ].join("\n");
 }
 
 function extractTextFromChoices(response) {

@@ -36,6 +36,7 @@ App web semplice: incolli un prompt grezzo, il backend lo passa a ChatGPT e rest
 - La web research e sempre attiva.
 - Il backend usa sempre il modello GPT primario configurato in `OPENAI_MODEL`.
 - Nel frontend non c'e piu il toggle di attivazione/disattivazione.
+- Se il provider non restituisce testo anche dopo retry, il server restituisce un fallback locale per evitare errore bloccante.
 
 ## Deploy online (Render)
 
