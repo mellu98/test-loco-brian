@@ -2,6 +2,13 @@
 
 App web semplice: incolli un prompt grezzo, il backend lo passa a ChatGPT e restituisce un prompt molto piu specifico.
 
+## Release 1.0.1
+
+- Stabilizzato il recupero quando OpenAI restituisce output vuoto o incompleto.
+- Migliorata la gestione dei timeout e degli errori upstream 5xx (niente blocco UI).
+- Fallback locale tematico (marketing, coding, studio, salute) con messaggi debug utili.
+- PWA aggiornata con gestione cache piu affidabile.
+
 ## Requisiti
 
 - Node.js 18+ (consigliato 20+)
