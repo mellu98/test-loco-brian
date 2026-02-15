@@ -39,7 +39,7 @@ async function improvePrompt() {
   }
 
   setBusy(true);
-  setStatus("Ottimizzo con ChatGPT + web research...", false);
+  setStatus("Ottimizzo...", false);
 
   try {
     const result = await improveViaBackend(rawPrompt);
