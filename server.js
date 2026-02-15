@@ -76,17 +76,30 @@ app.post("/api/improve", async (req, res) => {
 
     const result = await createImprovementResponse(prompt);
     let output = extractOutputText(result.response);
+    let refusal = extractRefusalText(result.response);
     let recoveredFromEmptyOutput = false;
 
     if (!output) {
-      const retryResponse = await requestDirectTextFallback(prompt);
+      const retryReason = getIncompleteReason(result.response);
+      const retryResponse = await requestDirectTextFallback(
+        prompt,
+        retryReason === "max_output_tokens"
+      );
       output = extractOutputText(retryResponse);
+      if (!refusal) {
+        refusal = extractRefusalText(retryResponse);
+      }
       recoveredFromEmptyOutput = Boolean(output);
     }
 
     if (!output) {
+      if (refusal) {
+        return res.status(422).json({ error: refusal });
+      }
+
       return res.status(502).json({
-        error: "Risposta vuota dal modello dopo retry automatico. Riprova con un prompt piu corto."
+        error:
+          "Risposta vuota dal modello dopo retry automatico. Riprova o aumenta MAX_OUTPUT_TOKENS."
       });
     }
 
@@ -185,7 +198,7 @@ function extractOutputText(response) {
         chunks.push(part.trim());
         return;
       }
-      if (typeof part?.text === "string" && part.text.trim()) {
+      if (part?.type === "output_text" && typeof part?.text === "string" && part.text.trim()) {
         chunks.push(part.text.trim());
       }
     });
@@ -197,6 +210,63 @@ function extractOutputText(response) {
   }
 
   return extractTextFromChoices(response);
+}
+
+function extractRefusalText(response) {
+  const chunks = [];
+
+  if (Array.isArray(response?.output)) {
+    response.output.forEach((item) => {
+      if (typeof item?.refusal === "string" && item.refusal.trim()) {
+        chunks.push(item.refusal.trim());
+      }
+
+      if (!Array.isArray(item?.content)) {
+        return;
+      }
+
+      item.content.forEach((part) => {
+        if (typeof part?.refusal === "string" && part.refusal.trim()) {
+          chunks.push(part.refusal.trim());
+          return;
+        }
+
+        if (part?.type === "refusal" && typeof part?.text === "string" && part.text.trim()) {
+          chunks.push(part.text.trim());
+        }
+      });
+    });
+  }
+
+  if (chunks.length > 0) {
+    return chunks.join("\n").trim();
+  }
+
+  const choices = Array.isArray(response?.choices) ? response.choices : [];
+  const refusalChunks = [];
+  choices.forEach((choice) => {
+    const directRefusal = choice?.message?.refusal;
+    if (typeof directRefusal === "string" && directRefusal.trim()) {
+      refusalChunks.push(directRefusal.trim());
+      return;
+    }
+
+    const content = choice?.message?.content;
+    if (!Array.isArray(content)) {
+      return;
+    }
+    content.forEach((part) => {
+      if (typeof part?.refusal === "string" && part.refusal.trim()) {
+        refusalChunks.push(part.refusal.trim());
+      }
+    });
+  });
+
+  return refusalChunks.join("\n").trim();
+}
+
+function getIncompleteReason(response) {
+  return response?.incomplete_details?.reason || "";
 }
 
 function extractTextFromChoices(response) {
@@ -245,9 +315,12 @@ async function createImprovementResponse(prompt) {
   };
 }
 
-function buildBasePayload(prompt, userInstructionText, modelName) {
+function buildBasePayload(prompt, userInstructionText, modelName, maxOutputTokensOverride) {
   const payload = {
     model: modelName || MODEL_NAME,
+    text: {
+      verbosity: "low"
+    },
     input: [
       {
         role: "system",
@@ -265,8 +338,12 @@ function buildBasePayload(prompt, userInstructionText, modelName) {
     ]
   };
 
-  if (MAX_OUTPUT_TOKENS > 0) {
-    payload.max_output_tokens = MAX_OUTPUT_TOKENS;
+  const maxOutputTokens = Number.isFinite(maxOutputTokensOverride)
+    ? Math.floor(maxOutputTokensOverride)
+    : MAX_OUTPUT_TOKENS;
+
+  if (maxOutputTokens > 0) {
+    payload.max_output_tokens = maxOutputTokens;
   }
 
   return payload;
@@ -281,9 +358,13 @@ async function requestDirectTextFallback(prompt) {
     prompt
   ].join("\n");
 
+  const boostedMaxOutputTokens = MAX_OUTPUT_TOKENS > 0
+    ? Math.max(MAX_OUTPUT_TOKENS, 1100)
+    : undefined;
+
   return requestOpenAIWithTimeoutRetry(
     {
-      ...buildBasePayload(prompt, retryInstruction, MODEL_NAME),
+      ...buildBasePayload(prompt, retryInstruction, MODEL_NAME, boostedMaxOutputTokens),
       tools: [{ type: "web_search" }]
     },
     OPENAI_TIMEOUT_WEB_SEARCH_MS,
