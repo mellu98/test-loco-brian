@@ -25,7 +25,6 @@ App web semplice: incolli un prompt grezzo, il backend lo passa a ChatGPT e rest
 - `OPENAI_TIMEOUT_WEB_SEARCH_MS`: timeout base richieste con web research, default `30000`
 - `OPENAI_TIMEOUT_RETRIES`: numero retry automatici su timeout, default `2`
 - `OPENAI_TIMEOUT_RETRY_DELTA_MS`: incremento timeout per ogni retry, default `15000`
-- `OPENAI_REASONING_EFFORT`: livello ragionamento (`minimal`, `low`, `medium`, `high`), default `minimal`
 - `MAX_OUTPUT_TOKENS`: limita la lunghezza output per ridurre latenza, default `550`
 - `MAX_PROMPT_LENGTH`: opzionale, default `6000`
 - `PORT`: opzionale, default `3000`
@@ -51,7 +50,6 @@ App web semplice: incolli un prompt grezzo, il backend lo passa a ChatGPT e rest
    - `OPENAI_TIMEOUT_WEB_SEARCH_MS` = `30000` (opzionale)
    - `OPENAI_TIMEOUT_RETRIES` = `2` (opzionale)
    - `OPENAI_TIMEOUT_RETRY_DELTA_MS` = `15000` (opzionale)
-   - `OPENAI_REASONING_EFFORT` = `minimal` (opzionale)
    - `MAX_OUTPUT_TOKENS` = `550` (opzionale)
 6. Deploy.
 7. Condividi l'URL Render (es. `https://tuo-progetto.onrender.com`) con il tuo amico.
