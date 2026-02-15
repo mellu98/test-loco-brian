@@ -94,11 +94,11 @@ app.post("/api/improve", async (req, res) => {
       recoveredFromEmptyOutput = Boolean(output);
     }
 
-    if (!output && !refusal) {
-      const chatFallback = await requestChatCompletionTextFallback(prompt);
-      output = extractTextFromChatCompletion(chatFallback);
+    if (!output && !refusal && typeof result.response?.id === "string" && result.response.id) {
+      const finalizedResponse = await requestFinalizeFromPreviousResponse(result.response.id);
+      output = extractOutputText(finalizedResponse);
       if (!refusal) {
-        refusal = extractRefusalFromChatCompletion(chatFallback);
+        refusal = extractRefusalText(finalizedResponse);
       }
       recoveredFromEmptyOutput = Boolean(output);
     }
@@ -310,56 +310,6 @@ function extractTextFromChoices(response) {
   return chunks.join("\n").trim();
 }
 
-function extractTextFromChatCompletion(completion) {
-  const choices = Array.isArray(completion?.choices) ? completion.choices : [];
-  const first = choices[0];
-  const content = first?.message?.content;
-
-  if (typeof content === "string" && content.trim()) {
-    return content.trim();
-  }
-
-  if (!Array.isArray(content)) {
-    return "";
-  }
-
-  const chunks = [];
-  content.forEach((part) => {
-    if (typeof part === "string" && part.trim()) {
-      chunks.push(part.trim());
-      return;
-    }
-    if (typeof part?.text === "string" && part.text.trim()) {
-      chunks.push(part.text.trim());
-    }
-  });
-
-  return chunks.join("\n").trim();
-}
-
-function extractRefusalFromChatCompletion(completion) {
-  const choices = Array.isArray(completion?.choices) ? completion.choices : [];
-  const first = choices[0];
-  const directRefusal = first?.message?.refusal;
-  if (typeof directRefusal === "string" && directRefusal.trim()) {
-    return directRefusal.trim();
-  }
-
-  const content = first?.message?.content;
-  if (!Array.isArray(content)) {
-    return "";
-  }
-
-  const chunks = [];
-  content.forEach((part) => {
-    if (typeof part?.refusal === "string" && part.refusal.trim()) {
-      chunks.push(part.refusal.trim());
-    }
-  });
-
-  return chunks.join("\n").trim();
-}
-
 async function createImprovementResponse(prompt) {
   const basePayload = buildBasePayload(prompt, undefined, MODEL_NAME);
   const response = await requestOpenAIWithTimeoutRetry(
@@ -447,50 +397,28 @@ async function requestOpenAI(payload, timeoutMs, label) {
   return waitForResponseCompletion(created, label);
 }
 
-async function requestChatCompletionTextFallback(prompt) {
-  let timeoutMs = OPENAI_TIMEOUT_WEB_SEARCH_MS;
-  let lastTimeoutError = null;
+async function requestFinalizeFromPreviousResponse(previousResponseId) {
+  const finalizeInstruction = [
+    "Usa i risultati gia raccolti e restituisci ORA solo il prompt finale ottimizzato.",
+    "Output testuale puro, nessuna introduzione e nessuna spiegazione."
+  ].join("\n");
 
-  for (let attempt = 0; attempt <= OPENAI_TIMEOUT_RETRIES; attempt += 1) {
-    const attemptLabel = attempt === 0
-      ? "ChatCompletions text fallback"
-      : `ChatCompletions text fallback retry-${attempt}`;
-
-    try {
-      return await withTimeout(
-        openai.chat.completions.create({
-          model: MODEL_NAME,
-          messages: [
-            { role: "system", content: SYSTEM_INSTRUCTIONS },
-            {
-              role: "user",
-              content: `Migliora questo prompt rendendolo specifico e operativo:\n\n${prompt}`
-            }
-          ],
-          max_completion_tokens: Math.max(MAX_OUTPUT_TOKENS, 1100)
-        }),
-        timeoutMs,
-        attemptLabel
-      );
-    } catch (error) {
-      if (!isTimeoutError(error)) {
-        throw error;
-      }
-      lastTimeoutError = error;
-      if (attempt === OPENAI_TIMEOUT_RETRIES) {
-        lastTimeoutError.attempts = OPENAI_TIMEOUT_RETRIES + 1;
-        throw lastTimeoutError;
-      }
-      timeoutMs += OPENAI_TIMEOUT_RETRY_DELTA_MS;
-    }
-  }
-
-  if (lastTimeoutError) {
-    lastTimeoutError.attempts = OPENAI_TIMEOUT_RETRIES + 1;
-    throw lastTimeoutError;
-  }
-
-  throw new Error("ChatCompletions fallback failed without timeout details.");
+  return requestOpenAIWithTimeoutRetry(
+    {
+      model: MODEL_NAME,
+      previous_response_id: previousResponseId,
+      text: { verbosity: "low" },
+      input: [
+        {
+          role: "user",
+          content: [{ type: "input_text", text: finalizeInstruction }]
+        }
+      ],
+      max_output_tokens: Math.max(MAX_OUTPUT_TOKENS, 1100)
+    },
+    OPENAI_TIMEOUT_WEB_SEARCH_MS,
+    "OpenAI finalize-from-previous"
+  );
 }
 
 async function waitForResponseCompletion(initialResponse, label) {
