@@ -99,13 +99,15 @@ app.post("/api/improve", async (req, res) => {
     let recoveredFromEmptyOutput = false;
     let finalDebug = primaryDebug;
     let usedNoWebRecovery = false;
+    let lastResponse = result.response;
 
     if (!output) {
-      const retryReason = getIncompleteReason(result.response);
+      const retryReason = getIncompleteReason(lastResponse);
       const retryResponse = await requestDirectTextFallback(
         prompt,
         retryReason === "max_output_tokens"
       );
+      lastResponse = retryResponse;
       finalDebug = buildResponseDebugInfo(retryResponse);
       output = extractOutputText(retryResponse);
       if (!refusal) {
@@ -114,8 +116,12 @@ app.post("/api/improve", async (req, res) => {
       recoveredFromEmptyOutput = Boolean(output);
     }
 
-    if (!output && !refusal && typeof result.response?.id === "string" && result.response.id) {
-      const finalizedResponse = await requestFinalizeFromPreviousResponse(result.response.id);
+    if (!output && !refusal && typeof lastResponse?.id === "string" && lastResponse.id) {
+      const finalizedResponse = await requestFinalizeFromPreviousResponse(
+        lastResponse.id,
+        getIncompleteReason(lastResponse) === "max_output_tokens"
+      );
+      lastResponse = finalizedResponse;
       finalDebug = buildResponseDebugInfo(finalizedResponse);
       output = extractOutputText(finalizedResponse);
       if (!refusal) {
@@ -125,11 +131,32 @@ app.post("/api/improve", async (req, res) => {
     }
 
     if (!output && !refusal) {
-      const modelOnlyResponse = await requestModelOnlyFallback(prompt);
+      const modelOnlyResponse = await requestModelOnlyFallback(
+        prompt,
+        getIncompleteReason(lastResponse) === "max_output_tokens"
+      );
+      lastResponse = modelOnlyResponse;
       finalDebug = buildResponseDebugInfo(modelOnlyResponse);
       output = extractOutputText(modelOnlyResponse);
       if (!refusal) {
         refusal = extractRefusalText(modelOnlyResponse);
+      }
+      if (output) {
+        recoveredFromEmptyOutput = true;
+        usedNoWebRecovery = true;
+      }
+    }
+
+    if (!output && !refusal && typeof lastResponse?.id === "string" && lastResponse.id) {
+      const finalizedModelOnlyResponse = await requestFinalizeFromPreviousResponse(
+        lastResponse.id,
+        getIncompleteReason(lastResponse) === "max_output_tokens"
+      );
+      lastResponse = finalizedModelOnlyResponse;
+      finalDebug = buildResponseDebugInfo(finalizedModelOnlyResponse);
+      output = extractOutputText(finalizedModelOnlyResponse);
+      if (!refusal) {
+        refusal = extractRefusalText(finalizedModelOnlyResponse);
       }
       if (output) {
         recoveredFromEmptyOutput = true;
@@ -598,7 +625,12 @@ function extractTextFromChoices(response) {
 }
 
 async function createImprovementResponse(prompt) {
-  const basePayload = buildBasePayload(prompt, undefined, MODEL_NAME);
+  const basePayload = buildBasePayload(
+    prompt,
+    undefined,
+    MODEL_NAME,
+    getAdaptiveMaxOutputTokens("initial")
+  );
   const response = await requestOpenAIWithTimeoutRetry(
     {
       ...basePayload,
@@ -647,18 +679,21 @@ function buildBasePayload(prompt, userInstructionText, modelName, maxOutputToken
   return payload;
 }
 
-async function requestDirectTextFallback(prompt) {
+async function requestDirectTextFallback(prompt, isTokenLimited) {
   const retryInstruction = [
     "Genera direttamente il prompt finale ottimizzato in testo semplice.",
     "Nessuna spiegazione extra.",
+    isTokenLimited
+      ? "Mantieni il risultato molto conciso (massimo 12 righe operative)."
+      : "Mantieni il risultato conciso e operativo.",
     "",
     "Prompt di partenza:",
     prompt
   ].join("\n");
 
-  const boostedMaxOutputTokens = MAX_OUTPUT_TOKENS > 0
-    ? Math.max(MAX_OUTPUT_TOKENS, 1100)
-    : undefined;
+  const boostedMaxOutputTokens = getAdaptiveMaxOutputTokens(
+    isTokenLimited ? "token_pressure" : "retry"
+  );
 
   return requestOpenAIWithTimeoutRetry(
     {
@@ -670,19 +705,22 @@ async function requestDirectTextFallback(prompt) {
   );
 }
 
-async function requestModelOnlyFallback(prompt) {
+async function requestModelOnlyFallback(prompt, isTokenLimited) {
   const retryInstruction = [
     "Genera direttamente il prompt finale ottimizzato in testo semplice.",
     "Nessuna spiegazione extra.",
     "Nessuna chiamata a strumenti esterni.",
+    isTokenLimited
+      ? "Output compatto: massimo 12 righe operative."
+      : "Output conciso e subito applicabile.",
     "",
     "Prompt di partenza:",
     prompt
   ].join("\n");
 
-  const boostedMaxOutputTokens = MAX_OUTPUT_TOKENS > 0
-    ? Math.max(MAX_OUTPUT_TOKENS, 1100)
-    : undefined;
+  const boostedMaxOutputTokens = getAdaptiveMaxOutputTokens(
+    isTokenLimited ? "token_pressure" : "retry"
+  );
 
   return requestOpenAIWithTimeoutRetry(
     buildBasePayload(prompt, retryInstruction, MODEL_NAME, boostedMaxOutputTokens),
@@ -705,10 +743,13 @@ async function requestOpenAI(payload, timeoutMs, label) {
   return waitForResponseCompletion(created, label);
 }
 
-async function requestFinalizeFromPreviousResponse(previousResponseId) {
+async function requestFinalizeFromPreviousResponse(previousResponseId, isTokenLimited) {
   const finalizeInstruction = [
     "Usa i risultati gia raccolti e restituisci ORA solo il prompt finale ottimizzato.",
-    "Output testuale puro, nessuna introduzione e nessuna spiegazione."
+    "Output testuale puro, nessuna introduzione e nessuna spiegazione.",
+    isTokenLimited
+      ? "Formato compatto: massimo 12 righe operative."
+      : "Mantieni il testo conciso e operativo."
   ].join("\n");
 
   return requestOpenAIWithTimeoutRetry(
@@ -722,11 +763,29 @@ async function requestFinalizeFromPreviousResponse(previousResponseId) {
           content: [{ type: "input_text", text: finalizeInstruction }]
         }
       ],
-      max_output_tokens: Math.max(MAX_OUTPUT_TOKENS, 1100)
+      max_output_tokens: getAdaptiveMaxOutputTokens(
+        isTokenLimited ? "token_pressure" : "retry"
+      )
     },
     OPENAI_TIMEOUT_WEB_SEARCH_MS,
     "OpenAI finalize-from-previous"
   );
+}
+
+function getAdaptiveMaxOutputTokens(mode) {
+  let floor = 1100;
+  if (mode === "initial") {
+    floor = 1200;
+  } else if (mode === "retry") {
+    floor = 1600;
+  } else if (mode === "token_pressure") {
+    floor = 2600;
+  }
+
+  if (MAX_OUTPUT_TOKENS > 0) {
+    return Math.max(MAX_OUTPUT_TOKENS, floor);
+  }
+  return floor;
 }
 
 async function waitForResponseCompletion(initialResponse, label) {
