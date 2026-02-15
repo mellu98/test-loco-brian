@@ -93,7 +93,7 @@ app.post("/api/improve", async (req, res) => {
     }
 
     if (!output && !refusal) {
-      const chatFallback = await requestChatCompletionWebSearchFallback(prompt);
+      const chatFallback = await requestChatCompletionTextFallback(prompt);
       output = extractTextFromChatCompletion(chatFallback);
       if (!refusal) {
         refusal = extractRefusalFromChatCompletion(chatFallback);
@@ -444,14 +444,14 @@ async function requestOpenAI(payload, timeoutMs, label) {
   return withTimeout(openai.responses.create(payload), timeoutMs, label);
 }
 
-async function requestChatCompletionWebSearchFallback(prompt) {
+async function requestChatCompletionTextFallback(prompt) {
   let timeoutMs = OPENAI_TIMEOUT_WEB_SEARCH_MS;
   let lastTimeoutError = null;
 
   for (let attempt = 0; attempt <= OPENAI_TIMEOUT_RETRIES; attempt += 1) {
     const attemptLabel = attempt === 0
-      ? "ChatCompletions+web_search fallback"
-      : `ChatCompletions+web_search fallback retry-${attempt}`;
+      ? "ChatCompletions text fallback"
+      : `ChatCompletions text fallback retry-${attempt}`;
 
     try {
       return await withTimeout(
@@ -464,8 +464,7 @@ async function requestChatCompletionWebSearchFallback(prompt) {
               content: `Migliora questo prompt rendendolo specifico e operativo:\n\n${prompt}`
             }
           ],
-          max_completion_tokens: Math.max(MAX_OUTPUT_TOKENS, 1100),
-          web_search_options: { search_context_size: "low" }
+          max_completion_tokens: Math.max(MAX_OUTPUT_TOKENS, 1100)
         }),
         timeoutMs,
         attemptLabel
