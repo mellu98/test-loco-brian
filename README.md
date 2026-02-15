@@ -36,7 +36,23 @@ App web semplice: incolli un prompt grezzo, il backend lo passa a ChatGPT e rest
 - `OPENAI_POLL_MAX_WAIT_MS`: attesa massima totale del polling, default `45000`
 - `MAX_OUTPUT_TOKENS`: limita la lunghezza output per ridurre latenza, default `550`
 - `MAX_PROMPT_LENGTH`: opzionale, default `6000`
+- `LOG_EMPTY_OUTPUT_TRACE`: opzionale, default `1`. Se `1`, logga su server un evento JSON quando il primo tentativo non produce testo.
 - `PORT`: opzionale, default `3000`
+
+## Debug risposta vuota (primo tentativo)
+
+Quando il frontend mostra `Il modello ha risposto vuoto al primo tentativo`, ora hai diagnostica strutturata:
+
+- **Browser status**: mostra un hint compatto (`cause=...`, `types=...`, `tok=...`, `id=...`).
+- **Browser console**: log `Debug modello (/api/improve)` con il payload completo.
+- **Server logs**: evento `[debug-empty-output] { ... }` con trace di ogni step.
+
+Campi chiave:
+
+- `diagnosis.root_cause`: causa stimata (`web_search_without_final_text`, `max_output_tokens_reached`, ecc.).
+- `first_attempt`: dettagli del primo tentativo (status, incomplete_reason, output_types, token usage, tempi).
+- `trace`: sequenza completa dei tentativi di recupero.
+- `request_id`: ID correlabile tra UI e log server.
 
 ## Web Research
 

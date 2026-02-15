@@ -1,5 +1,6 @@
 "use strict";
 
+const { randomUUID } = require("crypto");
 const path = require("path");
 const express = require("express");
 const OpenAI = require("openai");
@@ -15,6 +16,8 @@ const OPENAI_TIMEOUT_RETRY_DELTA_MS = toPositiveInt(process.env.OPENAI_TIMEOUT_R
 const OPENAI_POLL_INTERVAL_MS = toPositiveInt(process.env.OPENAI_POLL_INTERVAL_MS, 1200);
 const OPENAI_POLL_MAX_WAIT_MS = toPositiveInt(process.env.OPENAI_POLL_MAX_WAIT_MS, 45000);
 const MAX_OUTPUT_TOKENS = toPositiveInt(process.env.MAX_OUTPUT_TOKENS, 550);
+const DEBUG_TRACE_VERSION = "2026-02-15";
+const LOG_EMPTY_OUTPUT_TRACE = process.env.LOG_EMPTY_OUTPUT_TRACE !== "0";
 
 const SYSTEM_INSTRUCTIONS = `
 Sei un Prompt Engineer senior.
@@ -73,41 +76,63 @@ app.get("/styles.css", (_req, res) => {
 app.use(express.static(path.join(__dirname)));
 
 app.post("/api/improve", async (req, res) => {
+  const requestId = randomUUID();
+  const requestStartedAt = Date.now();
+  const trace = [];
   let prompt = "";
+  res.set("X-Debug-Request-Id", requestId);
+
   try {
     if (!openai) {
       return res.status(500).json({
-        error: "OPENAI_API_KEY non configurata sul server."
+        error: "OPENAI_API_KEY non configurata sul server.",
+        requestId
       });
     }
 
     prompt = normalizePrompt(req.body?.prompt);
     if (!prompt) {
-      return res.status(400).json({ error: "Il campo prompt e obbligatorio." });
+      return res.status(400).json({ error: "Il campo prompt e obbligatorio.", requestId });
     }
 
     if (prompt.length > MAX_PROMPT_LENGTH) {
       return res.status(400).json({
-        error: `Prompt troppo lungo: massimo ${MAX_PROMPT_LENGTH} caratteri.`
+        error: `Prompt troppo lungo: massimo ${MAX_PROMPT_LENGTH} caratteri.`,
+        requestId
       });
     }
 
+    const initialStartedAt = Date.now();
     const result = await createImprovementResponse(prompt);
-    const primaryDebug = buildResponseDebugInfo(result.response);
-    let output = extractOutputText(result.response);
-    let refusal = extractRefusalText(result.response);
-    let recoveredFromEmptyOutput = false;
-    let finalDebug = primaryDebug;
-    let usedNoWebRecovery = false;
     let lastResponse = result.response;
+    pushDebugTrace(
+      trace,
+      "initial_web_search",
+      lastResponse,
+      Date.now() - initialStartedAt
+    );
+
+    let finalDebug = buildResponseDebugInfo(lastResponse);
+    let output = extractOutputText(lastResponse);
+    let refusal = extractRefusalText(lastResponse);
+    let recoveredFromEmptyOutput = false;
+    let usedNoWebRecovery = false;
 
     if (!output) {
       const retryReason = getIncompleteReason(lastResponse);
+      const retryStartedAt = Date.now();
       const retryResponse = await requestDirectTextFallback(
         prompt,
         retryReason === "max_output_tokens"
       );
       lastResponse = retryResponse;
+      pushDebugTrace(
+        trace,
+        "retry_web_search_direct_text",
+        lastResponse,
+        Date.now() - retryStartedAt,
+        { trigger_reason: retryReason || "empty_output" }
+      );
       finalDebug = buildResponseDebugInfo(retryResponse);
       output = extractOutputText(retryResponse);
       if (!refusal) {
@@ -117,11 +142,20 @@ app.post("/api/improve", async (req, res) => {
     }
 
     if (!output && !refusal && typeof lastResponse?.id === "string" && lastResponse.id) {
+      const finalizeReason = getIncompleteReason(lastResponse);
+      const finalizeStartedAt = Date.now();
       const finalizedResponse = await requestFinalizeFromPreviousResponse(
         lastResponse.id,
-        getIncompleteReason(lastResponse) === "max_output_tokens"
+        finalizeReason === "max_output_tokens"
       );
       lastResponse = finalizedResponse;
+      pushDebugTrace(
+        trace,
+        "finalize_from_previous_web_search",
+        lastResponse,
+        Date.now() - finalizeStartedAt,
+        { trigger_reason: finalizeReason || "empty_output" }
+      );
       finalDebug = buildResponseDebugInfo(finalizedResponse);
       output = extractOutputText(finalizedResponse);
       if (!refusal) {
@@ -131,11 +165,20 @@ app.post("/api/improve", async (req, res) => {
     }
 
     if (!output && !refusal) {
+      const modelOnlyReason = getIncompleteReason(lastResponse);
+      const modelOnlyStartedAt = Date.now();
       const modelOnlyResponse = await requestModelOnlyFallback(
         prompt,
-        getIncompleteReason(lastResponse) === "max_output_tokens"
+        modelOnlyReason === "max_output_tokens"
       );
       lastResponse = modelOnlyResponse;
+      pushDebugTrace(
+        trace,
+        "retry_model_only",
+        lastResponse,
+        Date.now() - modelOnlyStartedAt,
+        { trigger_reason: modelOnlyReason || "empty_output" }
+      );
       finalDebug = buildResponseDebugInfo(modelOnlyResponse);
       output = extractOutputText(modelOnlyResponse);
       if (!refusal) {
@@ -148,11 +191,20 @@ app.post("/api/improve", async (req, res) => {
     }
 
     if (!output && !refusal && typeof lastResponse?.id === "string" && lastResponse.id) {
+      const finalizeModelReason = getIncompleteReason(lastResponse);
+      const finalizeModelStartedAt = Date.now();
       const finalizedModelOnlyResponse = await requestFinalizeFromPreviousResponse(
         lastResponse.id,
-        getIncompleteReason(lastResponse) === "max_output_tokens"
+        finalizeModelReason === "max_output_tokens"
       );
       lastResponse = finalizedModelOnlyResponse;
+      pushDebugTrace(
+        trace,
+        "finalize_from_previous_model_only",
+        lastResponse,
+        Date.now() - finalizeModelStartedAt,
+        { trigger_reason: finalizeModelReason || "empty_output" }
+      );
       finalDebug = buildResponseDebugInfo(finalizedModelOnlyResponse);
       output = extractOutputText(finalizedModelOnlyResponse);
       if (!refusal) {
@@ -165,8 +217,26 @@ app.post("/api/improve", async (req, res) => {
     }
 
     if (!output) {
+      const debugPayload = buildResponseDebugPayload({
+        requestId,
+        trace,
+        finalDebug,
+        recoveredFromEmptyOutput: true,
+        usedNoWebRecovery,
+        usedLocalFallback: !refusal,
+        totalElapsedMs: Date.now() - requestStartedAt
+      });
+
+      if (shouldLogEmptyOutputDebug(debugPayload)) {
+        logEmptyOutputDebug(debugPayload);
+      }
+
       if (refusal) {
-        return res.status(422).json({ error: refusal });
+        return res.status(422).json({
+          error: refusal,
+          requestId,
+          debug: debugPayload
+        });
       }
 
       return res.status(200).json({
@@ -176,8 +246,23 @@ app.post("/api/improve", async (req, res) => {
         usedModel: MODEL_NAME,
         usedLocalFallback: true,
         usedNoWebRecovery,
-        debug: finalDebug
+        requestId,
+        debug: debugPayload
       });
+    }
+
+    const debugPayload = buildResponseDebugPayload({
+      requestId,
+      trace,
+      finalDebug,
+      recoveredFromEmptyOutput,
+      usedNoWebRecovery,
+      usedLocalFallback: false,
+      totalElapsedMs: Date.now() - requestStartedAt
+    });
+
+    if (shouldLogEmptyOutputDebug(debugPayload)) {
+      logEmptyOutputDebug(debugPayload);
     }
 
     return res.status(200).json({
@@ -185,13 +270,37 @@ app.post("/api/improve", async (req, res) => {
       recoveredFromEmptyOutput,
       usedWebSearch: true,
       usedModel: MODEL_NAME,
-      usedNoWebRecovery
+      usedNoWebRecovery,
+      requestId,
+      debug: debugPayload
     });
   } catch (error) {
     if (isTimeoutError(error)) {
       const timeoutMs = Number(error?.timeoutMs) || OPENAI_TIMEOUT_WEB_SEARCH_MS;
       const label = typeof error?.label === "string" ? error.label : "OpenAI";
       const attempts = Number(error?.attempts) || 1;
+
+      const errorDebug = {
+        timeout_label: label,
+        timeout_ms: timeoutMs,
+        attempts
+      };
+
+      const debugPayload = buildResponseDebugPayload({
+        requestId,
+        trace,
+        finalDebug: null,
+        recoveredFromEmptyOutput: Boolean(prompt),
+        usedNoWebRecovery: false,
+        usedLocalFallback: Boolean(prompt),
+        totalElapsedMs: Date.now() - requestStartedAt,
+        errorDebug
+      });
+
+      if (shouldLogEmptyOutputDebug(debugPayload)) {
+        logEmptyOutputDebug(debugPayload);
+      }
+
       if (prompt) {
         return res.status(200).json({
           prompt: buildLocalFallbackPrompt(prompt),
@@ -199,21 +308,40 @@ app.post("/api/improve", async (req, res) => {
           usedWebSearch: true,
           usedModel: MODEL_NAME,
           usedLocalFallback: true,
-          debug: {
-            timeout_label: label,
-            timeout_ms: timeoutMs,
-            attempts
-          }
+          requestId,
+          debug: debugPayload
         });
       }
 
       return res.status(504).json({
-        error: `Timeout ${label} dopo ${timeoutMs}ms (tentativi: ${attempts}). Riprova con un prompt piu corto.`
+        error: `Timeout ${label} dopo ${timeoutMs}ms (tentativi: ${attempts}). Riprova con un prompt piu corto.`,
+        requestId,
+        debug: debugPayload
       });
     }
 
     const status = Number(error?.status) || 502;
     const message = typeof error?.message === "string" ? error.message : "Errore chiamata OpenAI.";
+    const errorDebug = {
+      upstream_status: status,
+      upstream_error: message
+    };
+
+    const debugPayload = buildResponseDebugPayload({
+      requestId,
+      trace,
+      finalDebug: null,
+      recoveredFromEmptyOutput: Boolean(prompt && status >= 500),
+      usedNoWebRecovery: false,
+      usedLocalFallback: Boolean(prompt && status >= 500),
+      totalElapsedMs: Date.now() - requestStartedAt,
+      errorDebug
+    });
+
+    if (shouldLogEmptyOutputDebug(debugPayload)) {
+      logEmptyOutputDebug(debugPayload);
+    }
+
     if (prompt && status >= 500) {
       return res.status(200).json({
         prompt: buildLocalFallbackPrompt(prompt),
@@ -221,14 +349,16 @@ app.post("/api/improve", async (req, res) => {
         usedWebSearch: true,
         usedModel: MODEL_NAME,
         usedLocalFallback: true,
-        debug: {
-          upstream_status: status,
-          upstream_error: message
-        }
+        requestId,
+        debug: debugPayload
       });
     }
 
-    return res.status(status).json({ error: message });
+    return res.status(status).json({
+      error: message,
+      requestId,
+      debug: debugPayload
+    });
   }
 });
 
@@ -394,6 +524,9 @@ function getIncompleteReason(response) {
 function buildResponseDebugInfo(response) {
   const outputItems = Array.isArray(response?.output) ? response.output : [];
   const outputTypes = outputItems.map((item) => item?.type || "unknown");
+  const outputText = extractOutputText(response);
+  const refusalText = extractRefusalText(response);
+  const usage = extractUsageStats(response);
 
   const hasOutputText = outputItems.some((item) => {
     if (typeof item?.text === "string" && item.text.trim()) {
@@ -425,15 +558,208 @@ function buildResponseDebugInfo(response) {
     });
   });
 
+  const hasWebSearchCall = outputTypes.some((type) =>
+    String(type || "").toLowerCase().includes("web_search")
+  );
+
   return {
     response_id: response?.id || "",
     status: response?.status || "",
     incomplete_reason: getIncompleteReason(response),
     output_count: outputItems.length,
     output_types: outputTypes,
-    has_output_text: Boolean(hasOutputText),
-    has_refusal: Boolean(hasRefusal)
+    has_web_search_call: hasWebSearchCall,
+    has_output_text: Boolean(hasOutputText || outputText.length > 0),
+    has_refusal: Boolean(hasRefusal || refusalText.length > 0),
+    output_text_length: outputText.length,
+    refusal_length: refusalText.length,
+    usage_input_tokens: usage.input_tokens,
+    usage_output_tokens: usage.output_tokens,
+    usage_total_tokens: usage.total_tokens,
+    usage_reasoning_tokens: usage.reasoning_tokens
   };
+}
+
+function pushDebugTrace(trace, step, response, elapsedMs, extra) {
+  if (!Array.isArray(trace)) {
+    return;
+  }
+
+  const base = buildResponseDebugInfo(response);
+  const entry = {
+    step,
+    elapsed_ms: toFiniteNumber(elapsedMs),
+    ...base
+  };
+
+  if (extra && typeof extra === "object") {
+    Object.keys(extra).forEach((key) => {
+      const value = extra[key];
+      if (value === undefined) {
+        return;
+      }
+      entry[key] = value;
+    });
+  }
+
+  trace.push(entry);
+}
+
+function buildResponseDebugPayload({
+  requestId,
+  trace,
+  finalDebug,
+  recoveredFromEmptyOutput,
+  usedNoWebRecovery,
+  usedLocalFallback,
+  totalElapsedMs,
+  errorDebug
+}) {
+  const safeTrace = Array.isArray(trace) ? trace.slice() : [];
+  const diagnosis = buildEmptyOutputDiagnosis(safeTrace);
+  const firstAttempt = safeTrace.length > 0 ? safeTrace[0] : null;
+  const payload = {
+    debug_version: DEBUG_TRACE_VERSION,
+    request_id: requestId,
+    recovered_from_empty_output: Boolean(recoveredFromEmptyOutput),
+    used_no_web_recovery: Boolean(usedNoWebRecovery),
+    used_local_fallback: Boolean(usedLocalFallback),
+    total_elapsed_ms: toFiniteNumber(totalElapsedMs),
+    diagnosis,
+    first_attempt: firstAttempt,
+    final_attempt: finalDebug && typeof finalDebug === "object" ? finalDebug : null,
+    trace: safeTrace
+  };
+
+  if (errorDebug && typeof errorDebug === "object") {
+    payload.error = errorDebug;
+    if (typeof errorDebug.timeout_label === "string") {
+      payload.timeout_label = errorDebug.timeout_label;
+    }
+    if (Number.isFinite(Number(errorDebug.timeout_ms))) {
+      payload.timeout_ms = Number(errorDebug.timeout_ms);
+    }
+    if (Number.isFinite(Number(errorDebug.attempts))) {
+      payload.attempts = Number(errorDebug.attempts);
+    }
+    if (Number.isFinite(Number(errorDebug.upstream_status))) {
+      payload.upstream_status = Number(errorDebug.upstream_status);
+    }
+    if (typeof errorDebug.upstream_error === "string") {
+      payload.upstream_error = errorDebug.upstream_error;
+    }
+  }
+
+  return payload;
+}
+
+function buildEmptyOutputDiagnosis(trace) {
+  const firstAttempt = Array.isArray(trace) && trace.length > 0 ? trace[0] : null;
+  if (!firstAttempt) {
+    return {
+      root_cause: "missing_first_attempt_trace",
+      summary: "Nessuna traccia del primo tentativo disponibile."
+    };
+  }
+
+  if (firstAttempt.has_output_text) {
+    return {
+      root_cause: "no_empty_output_first_attempt",
+      summary: "Il primo tentativo ha gia prodotto testo utile."
+    };
+  }
+
+  if (firstAttempt.has_refusal) {
+    return {
+      root_cause: "first_attempt_refusal",
+      summary: "Il primo tentativo contiene una refusal e non testo utilizzabile."
+    };
+  }
+
+  if (firstAttempt.incomplete_reason === "max_output_tokens") {
+    return {
+      root_cause: "max_output_tokens_reached",
+      summary: "Il primo tentativo e stato interrotto per limite token."
+    };
+  }
+
+  if (typeof firstAttempt.status === "string" && firstAttempt.status && firstAttempt.status !== "completed") {
+    return {
+      root_cause: "first_attempt_not_completed",
+      summary: `Il primo tentativo e terminato con status=${firstAttempt.status}.`
+    };
+  }
+
+  if (firstAttempt.has_web_search_call && !firstAttempt.has_output_text) {
+    return {
+      root_cause: "web_search_without_final_text",
+      summary: "Il primo tentativo ha eseguito web_search ma non ha emesso output_text finale."
+    };
+  }
+
+  if (Number(firstAttempt.output_count) === 0) {
+    return {
+      root_cause: "first_attempt_no_output_items",
+      summary: "Il primo tentativo non contiene elementi in output."
+    };
+  }
+
+  return {
+    root_cause: "first_attempt_non_text_output",
+    summary: "Il primo tentativo contiene output non testuale."
+  };
+}
+
+function shouldLogEmptyOutputDebug(debugPayload) {
+  if (!LOG_EMPTY_OUTPUT_TRACE || !debugPayload || typeof debugPayload !== "object") {
+    return false;
+  }
+
+  if (debugPayload.used_local_fallback || debugPayload.recovered_from_empty_output) {
+    return true;
+  }
+
+  const rootCause = debugPayload?.diagnosis?.root_cause || "";
+  return rootCause !== "no_empty_output_first_attempt";
+}
+
+function logEmptyOutputDebug(debugPayload) {
+  try {
+    const event = {
+      request_id: debugPayload?.request_id || "",
+      root_cause: debugPayload?.diagnosis?.root_cause || "unknown",
+      summary: debugPayload?.diagnosis?.summary || "",
+      total_elapsed_ms: debugPayload?.total_elapsed_ms,
+      first_attempt: debugPayload?.first_attempt || null,
+      final_attempt: debugPayload?.final_attempt || null,
+      trace: Array.isArray(debugPayload?.trace) ? debugPayload.trace : [],
+      error: debugPayload?.error || null
+    };
+    console.warn(`[debug-empty-output] ${JSON.stringify(event)}`);
+  } catch (_error) {
+    console.warn("[debug-empty-output] Impossibile serializzare il payload di debug.");
+  }
+}
+
+function extractUsageStats(response) {
+  const usage = response?.usage || {};
+  const outputDetails = usage?.output_tokens_details || usage?.output_token_details || {};
+  return {
+    input_tokens: toFiniteNumber(usage?.input_tokens),
+    output_tokens: toFiniteNumber(usage?.output_tokens),
+    total_tokens: toFiniteNumber(usage?.total_tokens),
+    reasoning_tokens: toFiniteNumber(
+      outputDetails?.reasoning_tokens ?? usage?.reasoning_tokens
+    )
+  };
+}
+
+function toFiniteNumber(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+  return Math.max(0, Math.floor(parsed));
 }
 
 function buildLocalFallbackPrompt(userPrompt) {

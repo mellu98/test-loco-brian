@@ -48,11 +48,19 @@ async function improvePrompt() {
       const debugSuffix = result.debugHint ? ` [${result.debugHint}]` : "";
       setStatus(`Output generato con fallback locale per evitare risposta vuota del modello.${debugSuffix}`, false);
     } else if (result.usedNoWebRecovery) {
-      setStatus("Output recuperato con tentativo finale del modello primario.", false);
+      const debugSuffix = result.debugHint ? ` [${result.debugHint}]` : "";
+      setStatus(`Output recuperato con tentativo finale del modello primario.${debugSuffix}`, false);
     } else if (result.recoveredFromEmptyOutput) {
-      setStatus("Il modello ha risposto vuoto al primo tentativo: retry automatico completato.", false);
+      const debugSuffix = result.debugHint ? ` [${result.debugHint}]` : "";
+      setStatus(`Il modello ha risposto vuoto al primo tentativo: retry automatico completato.${debugSuffix}`, false);
     } else {
       setStatus("Prompt ottimizzato con web research.", false);
+    }
+    if (
+      result.debug &&
+      (result.recoveredFromEmptyOutput || result.usedNoWebRecovery || result.usedLocalFallback)
+    ) {
+      console.info("Debug modello (/api/improve):", result.debug);
     }
   } catch (error) {
     const fallbackPrompt = buildClientFallbackPrompt(rawPrompt);
@@ -112,6 +120,8 @@ async function requestImproveViaBackend(rawPrompt) {
       recoveredFromEmptyOutput: Boolean(data?.recoveredFromEmptyOutput),
       usedLocalFallback: Boolean(data?.usedLocalFallback),
       usedNoWebRecovery: Boolean(data?.usedNoWebRecovery),
+      requestId: typeof data?.requestId === "string" ? data.requestId : "",
+      debug: data?.debug && typeof data.debug === "object" ? data.debug : null,
       debugHint: formatFallbackDebugHint(data?.debug)
     };
   } catch (error) {
@@ -183,33 +193,55 @@ function formatFallbackDebugHint(debug) {
     return "";
   }
 
+  const diagnosis = debug?.diagnosis && typeof debug.diagnosis === "object"
+    ? debug.diagnosis
+    : null;
+  const primary = debug?.first_attempt && typeof debug.first_attempt === "object"
+    ? debug.first_attempt
+    : debug;
+  const errorPart = debug?.error && typeof debug.error === "object"
+    ? debug.error
+    : debug;
+
   const parts = [];
-  if (typeof debug.status === "string" && debug.status) {
-    parts.push(`status=${debug.status}`);
+  if (typeof debug.request_id === "string" && debug.request_id) {
+    parts.push(`id=${debug.request_id.slice(0, 8)}`);
   }
-  if (typeof debug.incomplete_reason === "string" && debug.incomplete_reason) {
-    parts.push(`reason=${debug.incomplete_reason}`);
+  if (typeof diagnosis?.root_cause === "string" && diagnosis.root_cause) {
+    parts.push(`cause=${diagnosis.root_cause}`);
   }
-  if (Array.isArray(debug.output_types) && debug.output_types.length > 0) {
-    parts.push(`types=${debug.output_types.join(",")}`);
+  if (typeof primary.status === "string" && primary.status) {
+    parts.push(`status=${primary.status}`);
   }
-  if (typeof debug.timeout_label === "string" && debug.timeout_label) {
-    parts.push(`timeout=${debug.timeout_label}`);
+  if (typeof primary.incomplete_reason === "string" && primary.incomplete_reason) {
+    parts.push(`reason=${primary.incomplete_reason}`);
   }
-  if (typeof debug.timeout_ms === "number" && Number.isFinite(debug.timeout_ms)) {
-    parts.push(`ms=${debug.timeout_ms}`);
+  if (Array.isArray(primary.output_types) && primary.output_types.length > 0) {
+    parts.push(`types=${primary.output_types.join(",")}`);
   }
-  if (typeof debug.attempts === "number" && Number.isFinite(debug.attempts)) {
-    parts.push(`attempts=${debug.attempts}`);
+  if (typeof primary.elapsed_ms === "number" && Number.isFinite(primary.elapsed_ms)) {
+    parts.push(`first_ms=${primary.elapsed_ms}`);
   }
-  if (typeof debug.upstream_status === "number" && Number.isFinite(debug.upstream_status)) {
-    parts.push(`upstream_status=${debug.upstream_status}`);
+  if (typeof primary.usage_total_tokens === "number" && Number.isFinite(primary.usage_total_tokens)) {
+    parts.push(`tok=${primary.usage_total_tokens}`);
   }
-  if (typeof debug.upstream_error === "string" && debug.upstream_error.trim()) {
-    parts.push(`upstream_error=${debug.upstream_error.trim().slice(0, 120)}`);
+  if (typeof errorPart.timeout_label === "string" && errorPart.timeout_label) {
+    parts.push(`timeout=${errorPart.timeout_label}`);
+  }
+  if (typeof errorPart.timeout_ms === "number" && Number.isFinite(errorPart.timeout_ms)) {
+    parts.push(`ms=${errorPart.timeout_ms}`);
+  }
+  if (typeof errorPart.attempts === "number" && Number.isFinite(errorPart.attempts)) {
+    parts.push(`attempts=${errorPart.attempts}`);
+  }
+  if (typeof errorPart.upstream_status === "number" && Number.isFinite(errorPart.upstream_status)) {
+    parts.push(`upstream_status=${errorPart.upstream_status}`);
+  }
+  if (typeof errorPart.upstream_error === "string" && errorPart.upstream_error.trim()) {
+    parts.push(`upstream_error=${errorPart.upstream_error.trim().slice(0, 120)}`);
   }
 
-  return parts.join(" | ");
+  return parts.slice(0, 7).join(" | ");
 }
 
 async function readApiError(response) {
