@@ -8,12 +8,15 @@ require("dotenv").config();
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
 const MODEL_NAME = process.env.OPENAI_MODEL || "gpt-5";
+const FAST_FALLBACK_MODEL = process.env.OPENAI_FAST_FALLBACK_MODEL || "gpt-4.1-mini";
+const ENABLE_MODEL_FALLBACK = process.env.OPENAI_ENABLE_MODEL_FALLBACK !== "false";
 const MAX_PROMPT_LENGTH = Number(process.env.MAX_PROMPT_LENGTH || 6000);
 const DEFAULT_USE_WEB_SEARCH = process.env.OPENAI_USE_WEB_SEARCH === "true";
 const OPENAI_TIMEOUT_NO_WEB_MS = toPositiveInt(process.env.OPENAI_TIMEOUT_NO_WEB_MS, 18000);
 const OPENAI_TIMEOUT_WEB_SEARCH_MS = toPositiveInt(process.env.OPENAI_TIMEOUT_WEB_SEARCH_MS, 12000);
 const OPENAI_TIMEOUT_RETRIES = toPositiveInt(process.env.OPENAI_TIMEOUT_RETRIES, 1);
 const OPENAI_TIMEOUT_RETRY_DELTA_MS = toPositiveInt(process.env.OPENAI_TIMEOUT_RETRY_DELTA_MS, 12000);
+const OPENAI_TIMEOUT_FAST_FALLBACK_MS = toPositiveInt(process.env.OPENAI_TIMEOUT_FAST_FALLBACK_MS, 20000);
 const MAX_OUTPUT_TOKENS = toPositiveInt(process.env.MAX_OUTPUT_TOKENS, 0);
 
 const SYSTEM_INSTRUCTIONS = `
@@ -82,7 +85,7 @@ app.post("/api/improve", async (req, res) => {
     let recoveredFromEmptyOutput = false;
 
     if (!output) {
-      const retryResponse = await requestDirectTextFallback(prompt);
+      const retryResponse = await requestDirectTextFallback(prompt, result.usedModel);
       output = extractOutputText(retryResponse);
       recoveredFromEmptyOutput = Boolean(output);
     }
@@ -97,7 +100,9 @@ app.post("/api/improve", async (req, res) => {
       prompt: output,
       usedWebSearch: result.usedWebSearch,
       fallbackToNoWebSearch: result.fallbackToNoWebSearch,
-      recoveredFromEmptyOutput
+      recoveredFromEmptyOutput,
+      usedModel: result.usedModel,
+      usedFastFallbackModel: result.usedFastFallbackModel
     });
   } catch (error) {
     if (isTimeoutError(error)) {
@@ -251,52 +256,97 @@ function extractTextFromChoices(response) {
 }
 
 async function createImprovementResponse(prompt, useWebSearch) {
-  const basePayload = buildBasePayload(prompt);
+  const basePayload = buildBasePayload(prompt, undefined, MODEL_NAME);
 
   if (!useWebSearch) {
-    return {
-      response: await requestOpenAIWithTimeoutRetry(
-        basePayload,
-        OPENAI_TIMEOUT_NO_WEB_MS,
-        "OpenAI"
-      ),
+    return requestWithFastModelFallback(basePayload, {
+      timeoutMs: OPENAI_TIMEOUT_NO_WEB_MS,
+      label: "OpenAI",
       usedWebSearch: false,
       fallbackToNoWebSearch: false
-    };
+    });
   }
 
   try {
+    const response = await requestOpenAIWithTimeoutRetry(
+      {
+        ...basePayload,
+        tools: [{ type: "web_search" }]
+      },
+      OPENAI_TIMEOUT_WEB_SEARCH_MS,
+      "OpenAI+web_search"
+    );
+
     return {
-      response: await requestOpenAI(
-        {
-          ...basePayload,
-          tools: [{ type: "web_search" }]
-        },
-        OPENAI_TIMEOUT_WEB_SEARCH_MS,
-        "OpenAI+web_search"
-      ),
+      response,
       usedWebSearch: true,
-      fallbackToNoWebSearch: false
+      fallbackToNoWebSearch: false,
+      usedModel: MODEL_NAME,
+      usedFastFallbackModel: false
     };
   } catch (error) {
     if (isWebSearchUnsupported(error) || isTimeoutError(error)) {
-      return {
-        response: await requestOpenAIWithTimeoutRetry(
-          basePayload,
-          OPENAI_TIMEOUT_NO_WEB_MS,
-          "OpenAI fallback"
-        ),
+      return requestWithFastModelFallback(basePayload, {
+        timeoutMs: OPENAI_TIMEOUT_NO_WEB_MS,
+        label: "OpenAI fallback",
         usedWebSearch: false,
         fallbackToNoWebSearch: true
-      };
+      });
     }
     throw error;
   }
 }
 
-function buildBasePayload(prompt, userInstructionText) {
+async function requestWithFastModelFallback(payload, options) {
+  const modelName = typeof payload?.model === "string" ? payload.model : MODEL_NAME;
+
+  try {
+    const response = await requestOpenAIWithTimeoutRetry(
+      payload,
+      options.timeoutMs,
+      options.label
+    );
+    return {
+      response,
+      usedWebSearch: options.usedWebSearch,
+      fallbackToNoWebSearch: options.fallbackToNoWebSearch,
+      usedModel: modelName,
+      usedFastFallbackModel: false
+    };
+  } catch (error) {
+    if (
+      !ENABLE_MODEL_FALLBACK ||
+      !isTimeoutError(error) ||
+      !FAST_FALLBACK_MODEL ||
+      FAST_FALLBACK_MODEL === modelName
+    ) {
+      throw error;
+    }
+
+    const fallbackPayload = {
+      ...payload,
+      model: FAST_FALLBACK_MODEL
+    };
+
+    const fallbackResponse = await requestOpenAIWithTimeoutRetry(
+      fallbackPayload,
+      OPENAI_TIMEOUT_FAST_FALLBACK_MS,
+      `${options.label} fast-model`
+    );
+
+    return {
+      response: fallbackResponse,
+      usedWebSearch: options.usedWebSearch,
+      fallbackToNoWebSearch: options.fallbackToNoWebSearch,
+      usedModel: FAST_FALLBACK_MODEL,
+      usedFastFallbackModel: true
+    };
+  }
+}
+
+function buildBasePayload(prompt, userInstructionText, modelName) {
   const payload = {
-    model: MODEL_NAME,
+    model: modelName || MODEL_NAME,
     input: [
       {
         role: "system",
@@ -321,7 +371,7 @@ function buildBasePayload(prompt, userInstructionText) {
   return payload;
 }
 
-async function requestDirectTextFallback(prompt) {
+async function requestDirectTextFallback(prompt, modelName) {
   const retryInstruction = [
     "Genera direttamente il prompt finale ottimizzato in testo semplice.",
     "Nessuna spiegazione extra.",
@@ -331,7 +381,7 @@ async function requestDirectTextFallback(prompt) {
   ].join("\n");
 
   return requestOpenAIWithTimeoutRetry(
-    buildBasePayload(prompt, retryInstruction),
+    buildBasePayload(prompt, retryInstruction, modelName || MODEL_NAME),
     OPENAI_TIMEOUT_NO_WEB_MS,
     "OpenAI retry-empty-output"
   );

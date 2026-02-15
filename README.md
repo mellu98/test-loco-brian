@@ -22,9 +22,12 @@ App web semplice: incolli un prompt grezzo, il backend lo passa a ChatGPT e rest
 
 - `OPENAI_API_KEY`: obbligatoria
 - `OPENAI_MODEL`: opzionale, default `gpt-5`
+- `OPENAI_FAST_FALLBACK_MODEL`: modello veloce usato se il primario va in timeout, default `gpt-4.1-mini`
+- `OPENAI_ENABLE_MODEL_FALLBACK`: abilita/disabilita fallback modello, default `true`
 - `OPENAI_USE_WEB_SEARCH`: default server se il toggle UI non viene inviato, default `false`
 - `OPENAI_TIMEOUT_NO_WEB_MS`: timeout richieste senza web research, default `18000`
 - `OPENAI_TIMEOUT_WEB_SEARCH_MS`: timeout richieste con web research, default `12000`
+- `OPENAI_TIMEOUT_FAST_FALLBACK_MS`: timeout per il modello fallback veloce, default `20000`
 - `OPENAI_TIMEOUT_RETRIES`: numero retry automatici su timeout, default `1`
 - `OPENAI_TIMEOUT_RETRY_DELTA_MS`: quanto aumentare il timeout a ogni retry, default `12000`
 - `MAX_OUTPUT_TOKENS`: limita la lunghezza output per ridurre latenza. `0` = nessun limite (default `0`)
@@ -36,6 +39,7 @@ App web semplice: incolli un prompt grezzo, il backend lo passa a ChatGPT e rest
 - Nel form trovi il toggle `Usa web research`.
 - Toggle OFF: modalita piu veloce.
 - Toggle ON: prova prima con ricerca web e, se lenta/non supportata, fa fallback automatico senza web research.
+- Se anche il modello principale e lento, il backend prova automaticamente un modello piu veloce.
 
 ## Deploy online (Render)
 
@@ -49,8 +53,11 @@ App web semplice: incolli un prompt grezzo, il backend lo passa a ChatGPT e rest
 5. In `Environment Variables` aggiungi:
    - `OPENAI_API_KEY` = tua chiave OpenAI
    - `OPENAI_MODEL` = `gpt-5` (opzionale)
+   - `OPENAI_FAST_FALLBACK_MODEL` = `gpt-4.1-mini` (opzionale)
+   - `OPENAI_ENABLE_MODEL_FALLBACK` = `true` (opzionale)
    - `OPENAI_TIMEOUT_NO_WEB_MS` = `18000` (opzionale)
    - `OPENAI_TIMEOUT_WEB_SEARCH_MS` = `12000` (opzionale)
+   - `OPENAI_TIMEOUT_FAST_FALLBACK_MS` = `20000` (opzionale)
    - `OPENAI_TIMEOUT_RETRIES` = `1` (opzionale)
    - `OPENAI_TIMEOUT_RETRY_DELTA_MS` = `12000` (opzionale)
 6. Deploy.

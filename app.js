@@ -3,7 +3,7 @@
 const INPUT_STORAGE_KEY = "prompt_forge_single_input_v3";
 const WEB_SEARCH_STORAGE_KEY = "prompt_forge_use_web_search_v1";
 const DEFAULT_RESULT = "Il prompt ottimizzato apparira qui.";
-const BACKEND_TIMEOUT_MS = 70000;
+const BACKEND_TIMEOUT_MS = 95000;
 
 const form = document.getElementById("prompt-form");
 const rawPromptInput = document.getElementById("raw-prompt");
@@ -57,7 +57,14 @@ async function improvePrompt() {
   try {
     const result = await improveViaBackend(rawPrompt, requestedWebSearch);
     resultNode.textContent = result.prompt;
-    if (result.fallbackToNoWebSearch) {
+    if (result.usedFastFallbackModel && result.fallbackToNoWebSearch) {
+      setStatus(
+        `Web research/modello primario lenti: completato con fallback veloce (${result.usedModel}).`,
+        false
+      );
+    } else if (result.usedFastFallbackModel) {
+      setStatus(`Modello primario lento: completato con fallback veloce (${result.usedModel}).`, false);
+    } else if (result.fallbackToNoWebSearch) {
       setStatus("Web research lenta/non disponibile: completato senza ricerca web.", false);
     } else if (result.recoveredFromEmptyOutput) {
       setStatus("Il modello ha risposto vuoto al primo tentativo: retry automatico completato.", false);
@@ -107,7 +114,9 @@ async function improveViaBackend(rawPrompt, useWebSearch) {
     prompt: output,
     usedWebSearch: Boolean(data?.usedWebSearch),
     fallbackToNoWebSearch: Boolean(data?.fallbackToNoWebSearch),
-    recoveredFromEmptyOutput: Boolean(data?.recoveredFromEmptyOutput)
+    recoveredFromEmptyOutput: Boolean(data?.recoveredFromEmptyOutput),
+    usedModel: typeof data?.usedModel === "string" ? data.usedModel : "",
+    usedFastFallbackModel: Boolean(data?.usedFastFallbackModel)
   };
 }
 
