@@ -232,7 +232,18 @@ function extractOutputText(response) {
     response.output_text.length > 0
   ) {
     const textFromArray = response.output_text
-      .map((part) => (typeof part === "string" ? part.trim() : ""))
+      .map((part) => {
+        if (typeof part === "string") {
+          return part.trim();
+        }
+        if (typeof part?.text === "string") {
+          return part.text.trim();
+        }
+        if (typeof part?.value === "string") {
+          return part.value.trim();
+        }
+        return "";
+      })
       .filter(Boolean)
       .join("\n")
       .trim();
@@ -262,6 +273,10 @@ function extractOutputText(response) {
     item.content.forEach((part) => {
       if (typeof part === "string" && part.trim()) {
         chunks.push(part.trim());
+        return;
+      }
+      if (typeof part?.text === "string" && part.text.trim()) {
+        chunks.push(part.text.trim());
         return;
       }
       if (part?.type === "output_text" && typeof part?.text === "string" && part.text.trim()) {

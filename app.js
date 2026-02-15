@@ -43,7 +43,8 @@ async function improvePrompt() {
     const result = await improveViaBackend(rawPrompt);
     resultNode.textContent = result.prompt;
     if (result.usedLocalFallback) {
-      setStatus("Output generato con fallback locale per evitare risposta vuota del modello.", false);
+      const debugSuffix = result.debugHint ? ` [${result.debugHint}]` : "";
+      setStatus(`Output generato con fallback locale per evitare risposta vuota del modello.${debugSuffix}`, false);
     } else if (result.usedNoWebRecovery) {
       setStatus("Output recuperato con tentativo finale del modello primario.", false);
     } else if (result.recoveredFromEmptyOutput) {
@@ -92,8 +93,37 @@ async function improveViaBackend(rawPrompt) {
     prompt: output,
     recoveredFromEmptyOutput: Boolean(data?.recoveredFromEmptyOutput),
     usedLocalFallback: Boolean(data?.usedLocalFallback),
-    usedNoWebRecovery: Boolean(data?.usedNoWebRecovery)
+    usedNoWebRecovery: Boolean(data?.usedNoWebRecovery),
+    debugHint: formatFallbackDebugHint(data?.debug)
   };
+}
+
+function formatFallbackDebugHint(debug) {
+  if (!debug || typeof debug !== "object") {
+    return "";
+  }
+
+  const parts = [];
+  if (typeof debug.status === "string" && debug.status) {
+    parts.push(`status=${debug.status}`);
+  }
+  if (typeof debug.incomplete_reason === "string" && debug.incomplete_reason) {
+    parts.push(`reason=${debug.incomplete_reason}`);
+  }
+  if (Array.isArray(debug.output_types) && debug.output_types.length > 0) {
+    parts.push(`types=${debug.output_types.join(",")}`);
+  }
+  if (typeof debug.timeout_label === "string" && debug.timeout_label) {
+    parts.push(`timeout=${debug.timeout_label}`);
+  }
+  if (typeof debug.timeout_ms === "number" && Number.isFinite(debug.timeout_ms)) {
+    parts.push(`ms=${debug.timeout_ms}`);
+  }
+  if (typeof debug.attempts === "number" && Number.isFinite(debug.attempts)) {
+    parts.push(`attempts=${debug.attempts}`);
+  }
+
+  return parts.join(" | ");
 }
 
 async function readApiError(response) {
