@@ -55,6 +55,21 @@ app.get("/service-worker.js", (_req, res) => {
   res.sendFile(path.join(__dirname, "service-worker.js"));
 });
 
+app.get("/app.js", (_req, res) => {
+  res.set("Cache-Control", "no-cache");
+  res.sendFile(path.join(__dirname, "app.js"));
+});
+
+app.get("/index.html", (_req, res) => {
+  res.set("Cache-Control", "no-cache");
+  res.sendFile(path.join(__dirname, "index.html"));
+});
+
+app.get("/styles.css", (_req, res) => {
+  res.set("Cache-Control", "no-cache");
+  res.sendFile(path.join(__dirname, "styles.css"));
+});
+
 app.use(express.static(path.join(__dirname)));
 
 app.post("/api/improve", async (req, res) => {
@@ -338,6 +353,40 @@ function buildLocalFallbackPrompt(userPrompt) {
   const concisePrompt = String(userPrompt || "")
     .replace(/\s+/g, " ")
     .trim();
+
+  const lowerPrompt = concisePrompt.toLowerCase();
+  const isDietRequest =
+    lowerPrompt.includes("dieta") ||
+    lowerPrompt.includes("alimentazione") ||
+    lowerPrompt.includes("dimagr");
+
+  if (isDietRequest) {
+    return [
+      "Agisci come nutrizionista educativo (non medico) e personal trainer della nutrizione.",
+      "Obiettivo: aiutarmi a iniziare una dieta in modo sano, sostenibile e realistico.",
+      "",
+      "Richiesta di partenza:",
+      concisePrompt,
+      "",
+      "Prima parte (domande chiarificatrici, max 3):",
+      "- Obiettivo principale (dimagrimento, ricomposizione, salute).",
+      "- Restrizioni/preferenze alimentari e budget.",
+      "- Livello di attivita fisica e routine giornaliera.",
+      "",
+      "Seconda parte (output pratico):",
+      "1. Strategia alimentare semplice per 4 settimane.",
+      "2. Calorie/macronutrienti stimate con range (non prescrizione medica).",
+      "3. Esempio menu 7 giorni (colazione, pranzo, cena, spuntini).",
+      "4. Lista spesa settimanale.",
+      "5. Errori da evitare e come gestire fame/sbalzi di motivazione.",
+      "6. Piano monitoraggio progressi (peso, circonferenze, energia).",
+      "",
+      "Vincoli:",
+      "- Italiano chiaro, tono pratico.",
+      "- Nessuna promessa irrealistica.",
+      "- Se emergono segnali clinici, consiglia consulto con dietista/medico."
+    ].join("\n");
+  }
 
   return [
     "Ruolo: Sei un assistente esperto e pragmatico.",

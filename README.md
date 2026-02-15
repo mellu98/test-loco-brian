@@ -73,6 +73,7 @@ L'app ora e configurata come PWA installabile.
 Note importanti:
 - Per installazione su telefono serve `https://` (tranne `http://localhost` in locale).
 - Dopo modifiche PWA, se non vedi subito gli aggiornamenti, chiudi e riapri l'app installata.
+- Se il frontend sembra non aggiornarsi, disinstalla e reinstalla la PWA per forzare l'ultimo service worker.
 
 ## Note sicurezza
 
