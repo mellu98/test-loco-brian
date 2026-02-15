@@ -12,6 +12,8 @@ const MAX_PROMPT_LENGTH = Number(process.env.MAX_PROMPT_LENGTH || 6000);
 const OPENAI_TIMEOUT_WEB_SEARCH_MS = toPositiveInt(process.env.OPENAI_TIMEOUT_WEB_SEARCH_MS, 30000);
 const OPENAI_TIMEOUT_RETRIES = toPositiveInt(process.env.OPENAI_TIMEOUT_RETRIES, 2);
 const OPENAI_TIMEOUT_RETRY_DELTA_MS = toPositiveInt(process.env.OPENAI_TIMEOUT_RETRY_DELTA_MS, 15000);
+const OPENAI_POLL_INTERVAL_MS = toPositiveInt(process.env.OPENAI_POLL_INTERVAL_MS, 1200);
+const OPENAI_POLL_MAX_WAIT_MS = toPositiveInt(process.env.OPENAI_POLL_MAX_WAIT_MS, 45000);
 const MAX_OUTPUT_TOKENS = toPositiveInt(process.env.MAX_OUTPUT_TOKENS, 550);
 
 const SYSTEM_INSTRUCTIONS = `
@@ -441,7 +443,8 @@ function isTimeoutError(error) {
 }
 
 async function requestOpenAI(payload, timeoutMs, label) {
-  return withTimeout(openai.responses.create(payload), timeoutMs, label);
+  const created = await withTimeout(openai.responses.create(payload), timeoutMs, label);
+  return waitForResponseCompletion(created, label);
 }
 
 async function requestChatCompletionTextFallback(prompt) {
@@ -488,6 +491,43 @@ async function requestChatCompletionTextFallback(prompt) {
   }
 
   throw new Error("ChatCompletions fallback failed without timeout details.");
+}
+
+async function waitForResponseCompletion(initialResponse, label) {
+  let response = initialResponse;
+  let waitedMs = 0;
+
+  while (isPendingResponseStatus(response?.status)) {
+    if (!response?.id) {
+      break;
+    }
+
+    if (waitedMs >= OPENAI_POLL_MAX_WAIT_MS) {
+      const timeoutError = new Error(`${label} polling timeout (${OPENAI_POLL_MAX_WAIT_MS}ms)`);
+      timeoutError.code = "TIMEOUT";
+      timeoutError.timeoutMs = OPENAI_POLL_MAX_WAIT_MS;
+      timeoutError.label = `${label} polling`;
+      throw timeoutError;
+    }
+
+    await sleep(OPENAI_POLL_INTERVAL_MS);
+    waitedMs += OPENAI_POLL_INTERVAL_MS;
+    response = await withTimeout(
+      openai.responses.retrieve(response.id),
+      OPENAI_TIMEOUT_WEB_SEARCH_MS,
+      `${label} retrieve`
+    );
+  }
+
+  return response;
+}
+
+function isPendingResponseStatus(status) {
+  return status === "queued" || status === "in_progress";
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function requestOpenAIWithTimeoutRetry(payload, firstTimeoutMs, label) {
