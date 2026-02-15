@@ -2,7 +2,7 @@
 
 const INPUT_STORAGE_KEY = "prompt_forge_single_input_v3";
 const DEFAULT_RESULT = "Il prompt ottimizzato apparira qui.";
-const BACKEND_TIMEOUT_MS = 95000;
+const BACKEND_TIMEOUT_MS = 160000;
 
 const form = document.getElementById("prompt-form");
 const rawPromptInput = document.getElementById("raw-prompt");
