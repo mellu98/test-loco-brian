@@ -1,6 +1,6 @@
 "use strict";
 
-const CACHE_NAME = "prompt-forge-cache-v4";
+const CACHE_NAME = "prompt-forge-cache-v5";
 const APP_SHELL_FILES = [
   "/",
   "/index.html",

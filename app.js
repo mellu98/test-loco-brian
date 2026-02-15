@@ -1,7 +1,6 @@
 "use strict";
 
 const INPUT_STORAGE_KEY = "prompt_forge_single_input_v3";
-const WEB_SEARCH_STORAGE_KEY = "prompt_forge_use_web_search_v1";
 const DEFAULT_RESULT = "Il prompt ottimizzato apparira qui.";
 const BACKEND_TIMEOUT_MS = 95000;
 
@@ -13,7 +12,6 @@ const statusNode = document.getElementById("status");
 const generateBtn = document.getElementById("generate-btn");
 const copyBtn = document.getElementById("copy-btn");
 const clearBtn = document.getElementById("clear-btn");
-const useWebSearchInput = document.getElementById("use-web-search");
 
 copyBtn.addEventListener("click", onCopy);
 clearBtn.addEventListener("click", onClear);
@@ -27,19 +25,11 @@ rawPromptInput.addEventListener("input", () => {
   localStorage.setItem(INPUT_STORAGE_KEY, rawPromptInput.value);
 });
 
-if (useWebSearchInput) {
-  useWebSearchInput.addEventListener("change", () => {
-    localStorage.setItem(WEB_SEARCH_STORAGE_KEY, useWebSearchInput.checked ? "1" : "0");
-  });
-}
-
 restoreDraft();
-restoreWebSearchPreference();
 registerServiceWorker();
 
 async function improvePrompt() {
   const rawPrompt = normalizePrompt(rawPromptInput.value);
-  const requestedWebSearch = Boolean(useWebSearchInput?.checked);
   if (!rawPrompt) {
     setStatus("Inserisci un prompt.", true);
     rawPromptInput.focus();
@@ -47,31 +37,15 @@ async function improvePrompt() {
   }
 
   setBusy(true);
-  setStatus(
-    requestedWebSearch
-      ? "Ottimizzo con ChatGPT + web research..."
-      : "Ottimizzo con ChatGPT (modalita veloce)...",
-    false
-  );
+  setStatus("Ottimizzo con ChatGPT + web research...", false);
 
   try {
-    const result = await improveViaBackend(rawPrompt, requestedWebSearch);
+    const result = await improveViaBackend(rawPrompt);
     resultNode.textContent = result.prompt;
-    if (result.usedFastFallbackModel && result.fallbackToNoWebSearch) {
-      setStatus(
-        `Web research/modello primario lenti: completato con fallback veloce (${result.usedModel}).`,
-        false
-      );
-    } else if (result.usedFastFallbackModel) {
-      setStatus(`Modello primario lento: completato con fallback veloce (${result.usedModel}).`, false);
-    } else if (result.fallbackToNoWebSearch) {
-      setStatus("Web research lenta/non disponibile: completato senza ricerca web.", false);
-    } else if (result.recoveredFromEmptyOutput) {
+    if (result.recoveredFromEmptyOutput) {
       setStatus("Il modello ha risposto vuoto al primo tentativo: retry automatico completato.", false);
-    } else if (result.usedWebSearch) {
-      setStatus("Prompt ottimizzato con web research.", false);
     } else {
-      setStatus("Prompt ottimizzato (modalita veloce).", false);
+      setStatus("Prompt ottimizzato con web research.", false);
     }
   } catch (error) {
     setStatus(`Errore: ${error.message}`, true);
@@ -80,7 +54,7 @@ async function improvePrompt() {
   }
 }
 
-async function improveViaBackend(rawPrompt, useWebSearch) {
+async function improveViaBackend(rawPrompt) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), BACKEND_TIMEOUT_MS);
   let response;
@@ -89,7 +63,7 @@ async function improveViaBackend(rawPrompt, useWebSearch) {
     response = await fetch("/api/improve", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt: rawPrompt, useWebSearch }),
+      body: JSON.stringify({ prompt: rawPrompt }),
       signal: controller.signal
     });
   } catch (error) {
@@ -112,11 +86,7 @@ async function improveViaBackend(rawPrompt, useWebSearch) {
   }
   return {
     prompt: output,
-    usedWebSearch: Boolean(data?.usedWebSearch),
-    fallbackToNoWebSearch: Boolean(data?.fallbackToNoWebSearch),
-    recoveredFromEmptyOutput: Boolean(data?.recoveredFromEmptyOutput),
-    usedModel: typeof data?.usedModel === "string" ? data.usedModel : "",
-    usedFastFallbackModel: Boolean(data?.usedFastFallbackModel)
+    recoveredFromEmptyOutput: Boolean(data?.recoveredFromEmptyOutput)
   };
 }
 
@@ -178,17 +148,6 @@ function restoreDraft() {
   setStatus("Bozza ripristinata.", false);
 }
 
-function restoreWebSearchPreference() {
-  if (!useWebSearchInput) {
-    return;
-  }
-
-  const savedValue = localStorage.getItem(WEB_SEARCH_STORAGE_KEY);
-  if (savedValue === "1") {
-    useWebSearchInput.checked = true;
-  }
-}
-
 function normalizePrompt(value) {
   return value
     .replace(/\r\n/g, "\n")
@@ -203,7 +162,7 @@ function setStatus(message, isError) {
 }
 
 function setBusy(isBusy) {
-  [generateBtn, copyBtn, clearBtn, useWebSearchInput].forEach((control) => {
+  [generateBtn, copyBtn, clearBtn].forEach((control) => {
     if (!control) {
       return;
     }
