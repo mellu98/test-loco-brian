@@ -77,9 +77,11 @@ app.post("/api/improve", async (req, res) => {
     }
 
     const result = await createImprovementResponse(prompt);
+    const primaryDebug = buildResponseDebugInfo(result.response);
     let output = extractOutputText(result.response);
     let refusal = extractRefusalText(result.response);
     let recoveredFromEmptyOutput = false;
+    let finalDebug = primaryDebug;
 
     if (!output) {
       const retryReason = getIncompleteReason(result.response);
@@ -87,6 +89,7 @@ app.post("/api/improve", async (req, res) => {
         prompt,
         retryReason === "max_output_tokens"
       );
+      finalDebug = buildResponseDebugInfo(retryResponse);
       output = extractOutputText(retryResponse);
       if (!refusal) {
         refusal = extractRefusalText(retryResponse);
@@ -96,6 +99,7 @@ app.post("/api/improve", async (req, res) => {
 
     if (!output && !refusal && typeof result.response?.id === "string" && result.response.id) {
       const finalizedResponse = await requestFinalizeFromPreviousResponse(result.response.id);
+      finalDebug = buildResponseDebugInfo(finalizedResponse);
       output = extractOutputText(finalizedResponse);
       if (!refusal) {
         refusal = extractRefusalText(finalizedResponse);
@@ -110,7 +114,8 @@ app.post("/api/improve", async (req, res) => {
 
       return res.status(502).json({
         error:
-          "Risposta vuota dal modello dopo retry automatico. Riprova o aumenta MAX_OUTPUT_TOKENS."
+          "Risposta vuota dal modello dopo retry automatico. Riprova o aumenta MAX_OUTPUT_TOKENS.",
+        debug: finalDebug
       });
     }
 
@@ -278,6 +283,51 @@ function extractRefusalText(response) {
 
 function getIncompleteReason(response) {
   return response?.incomplete_details?.reason || "";
+}
+
+function buildResponseDebugInfo(response) {
+  const outputItems = Array.isArray(response?.output) ? response.output : [];
+  const outputTypes = outputItems.map((item) => item?.type || "unknown");
+
+  const hasOutputText = outputItems.some((item) => {
+    if (typeof item?.text === "string" && item.text.trim()) {
+      return true;
+    }
+    if (!Array.isArray(item?.content)) {
+      return false;
+    }
+    return item.content.some((part) => {
+      if (typeof part === "string" && part.trim()) {
+        return true;
+      }
+      return part?.type === "output_text" && typeof part?.text === "string" && part.text.trim();
+    });
+  });
+
+  const hasRefusal = outputItems.some((item) => {
+    if (typeof item?.refusal === "string" && item.refusal.trim()) {
+      return true;
+    }
+    if (!Array.isArray(item?.content)) {
+      return false;
+    }
+    return item.content.some((part) => {
+      if (typeof part?.refusal === "string" && part.refusal.trim()) {
+        return true;
+      }
+      return part?.type === "refusal" && typeof part?.text === "string" && part.text.trim();
+    });
+  });
+
+  return {
+    response_id: response?.id || "",
+    status: response?.status || "",
+    incomplete_reason: getIncompleteReason(response),
+    output_count: outputItems.length,
+    output_types: outputTypes,
+    has_output_text: Boolean(hasOutputText),
+    has_refusal: Boolean(hasRefusal)
+  };
 }
 
 function extractTextFromChoices(response) {
