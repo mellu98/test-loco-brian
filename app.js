@@ -44,6 +44,8 @@ async function improvePrompt() {
     resultNode.textContent = result.prompt;
     if (result.usedLocalFallback) {
       setStatus("Output generato con fallback locale per evitare risposta vuota del modello.", false);
+    } else if (result.usedNoWebRecovery) {
+      setStatus("Output recuperato con tentativo finale del modello primario.", false);
     } else if (result.recoveredFromEmptyOutput) {
       setStatus("Il modello ha risposto vuoto al primo tentativo: retry automatico completato.", false);
     } else {
@@ -89,7 +91,8 @@ async function improveViaBackend(rawPrompt) {
   return {
     prompt: output,
     recoveredFromEmptyOutput: Boolean(data?.recoveredFromEmptyOutput),
-    usedLocalFallback: Boolean(data?.usedLocalFallback)
+    usedLocalFallback: Boolean(data?.usedLocalFallback),
+    usedNoWebRecovery: Boolean(data?.usedNoWebRecovery)
   };
 }
 

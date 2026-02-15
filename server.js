@@ -98,6 +98,7 @@ app.post("/api/improve", async (req, res) => {
     let refusal = extractRefusalText(result.response);
     let recoveredFromEmptyOutput = false;
     let finalDebug = primaryDebug;
+    let usedNoWebRecovery = false;
 
     if (!output) {
       const retryReason = getIncompleteReason(result.response);
@@ -123,6 +124,19 @@ app.post("/api/improve", async (req, res) => {
       recoveredFromEmptyOutput = Boolean(output);
     }
 
+    if (!output && !refusal) {
+      const modelOnlyResponse = await requestModelOnlyFallback(prompt);
+      finalDebug = buildResponseDebugInfo(modelOnlyResponse);
+      output = extractOutputText(modelOnlyResponse);
+      if (!refusal) {
+        refusal = extractRefusalText(modelOnlyResponse);
+      }
+      if (output) {
+        recoveredFromEmptyOutput = true;
+        usedNoWebRecovery = true;
+      }
+    }
+
     if (!output) {
       if (refusal) {
         return res.status(422).json({ error: refusal });
@@ -134,6 +148,7 @@ app.post("/api/improve", async (req, res) => {
         usedWebSearch: true,
         usedModel: MODEL_NAME,
         usedLocalFallback: true,
+        usedNoWebRecovery,
         debug: finalDebug
       });
     }
@@ -142,13 +157,29 @@ app.post("/api/improve", async (req, res) => {
       prompt: output,
       recoveredFromEmptyOutput,
       usedWebSearch: true,
-      usedModel: MODEL_NAME
+      usedModel: MODEL_NAME,
+      usedNoWebRecovery
     });
   } catch (error) {
     if (isTimeoutError(error)) {
       const timeoutMs = Number(error?.timeoutMs) || OPENAI_TIMEOUT_WEB_SEARCH_MS;
       const label = typeof error?.label === "string" ? error.label : "OpenAI";
       const attempts = Number(error?.attempts) || 1;
+      if (prompt) {
+        return res.status(200).json({
+          prompt: buildLocalFallbackPrompt(prompt),
+          recoveredFromEmptyOutput: true,
+          usedWebSearch: true,
+          usedModel: MODEL_NAME,
+          usedLocalFallback: true,
+          debug: {
+            timeout_label: label,
+            timeout_ms: timeoutMs,
+            attempts
+          }
+        });
+      }
+
       return res.status(504).json({
         error: `Timeout ${label} dopo ${timeoutMs}ms (tentativi: ${attempts}). Riprova con un prompt piu corto.`
       });
@@ -355,12 +386,54 @@ function buildLocalFallbackPrompt(userPrompt) {
     .trim();
 
   const lowerPrompt = concisePrompt.toLowerCase();
-  const isDietRequest =
-    lowerPrompt.includes("dieta") ||
-    lowerPrompt.includes("alimentazione") ||
-    lowerPrompt.includes("dimagr");
+  const isHealthRequest = hasAnyKeyword(lowerPrompt, [
+    "dieta",
+    "alimentazione",
+    "dimagr",
+    "calorie",
+    "fitness",
+    "allenamento",
+    "nutriz"
+  ]);
+  const isMarketingRequest = hasAnyKeyword(lowerPrompt, [
+    "marketing",
+    "campagna",
+    "lead",
+    "funnel",
+    "brand",
+    "social",
+    "ads",
+    "seo",
+    "ecommerce",
+    "vendit",
+    "growth"
+  ]);
+  const isCodingRequest = hasAnyKeyword(lowerPrompt, [
+    "codice",
+    "bug",
+    "debug",
+    "javascript",
+    "typescript",
+    "python",
+    "node",
+    "api",
+    "app",
+    "frontend",
+    "backend",
+    "deploy",
+    "server"
+  ]);
+  const isStudyRequest = hasAnyKeyword(lowerPrompt, [
+    "stud",
+    "esame",
+    "tesi",
+    "impar",
+    "apprendere",
+    "riassunto",
+    "piano studio"
+  ]);
 
-  if (isDietRequest) {
+  if (isHealthRequest) {
     return [
       "Agisci come nutrizionista educativo (non medico) e personal trainer della nutrizione.",
       "Obiettivo: aiutarmi a iniziare una dieta in modo sano, sostenibile e realistico.",
@@ -388,11 +461,63 @@ function buildLocalFallbackPrompt(userPrompt) {
     ].join("\n");
   }
 
+  if (isMarketingRequest) {
+    return [
+      "Ruolo: Sei un growth marketer senior orientato ai risultati.",
+      "Obiettivo: creare un piano marketing concreto, misurabile e sostenibile.",
+      `Richiesta utente: ${concisePrompt}`,
+      "Output richiesto:",
+      "1. Sintesi strategica in 4-6 righe (target, proposta di valore, canali prioritari).",
+      "2. Piano operativo 90 giorni in fasi: setup, test, ottimizzazione, scala.",
+      "3. Canali consigliati con motivazione e KPI per ciascun canale.",
+      "4. Budget indicativo low/medium/high e ripartizione percentuale.",
+      "5. Calendario contenuti/campagne per 4 settimane.",
+      "6. Dashboard KPI minima (CAC, CPL, conversion rate, ROAS, LTV) con soglie target.",
+      "Vincoli:",
+      "- Italiano chiaro, zero teoria superflua.",
+      "- Passi numerati e azionabili subito.",
+      "- Evidenzia ipotesi da validare."
+    ].join("\n");
+  }
+
+  if (isCodingRequest) {
+    return [
+      "Ruolo: Sei un software engineer senior pragmatico.",
+      "Obiettivo: fornire una soluzione tecnica implementabile rapidamente.",
+      `Richiesta utente: ${concisePrompt}`,
+      "Formato output:",
+      "1. Diagnosi rapida del problema o obiettivo tecnico.",
+      "2. Piano step-by-step con comandi/esempi concreti.",
+      "3. Patch di codice proposta (snippets pronti da incollare).",
+      "4. Checklist di verifica e test minimi.",
+      "Vincoli:",
+      "- Evita astrazioni inutili.",
+      "- Specifica assunzioni e limiti.",
+      "- Mantieni compatibilita con stack web moderno."
+    ].join("\n");
+  }
+
+  if (isStudyRequest) {
+    return [
+      "Ruolo: Sei un tutor esperto in metodo di studio.",
+      "Obiettivo: costruire un piano di apprendimento realistico e progressivo.",
+      `Richiesta utente: ${concisePrompt}`,
+      "Formato output:",
+      "1. Obiettivo concreto (misurabile) e livello attuale ipotizzato.",
+      "2. Piano settimanale con blocchi giornalieri e priorita.",
+      "3. Tecniche pratiche (active recall, spaced repetition, esercizi).",
+      "4. Metriche di avanzamento e checkpoint.",
+      "5. Errori comuni da evitare.",
+      "Vincoli:",
+      "- Linguaggio semplice e operativo.",
+      "- Nessun consiglio generico non applicabile."
+    ].join("\n");
+  }
+
   return [
-    "Ruolo: Sei un assistente esperto e pragmatico.",
-    "Obiettivo: Fornire una risposta utile, concreta e immediatamente applicabile alla richiesta dell'utente.",
+    "Ruolo: Sei un assistente esperto e pragmatico orientato all'azione.",
+    "Obiettivo: Fornire una risposta utile, concreta e immediatamente applicabile.",
     `Richiesta utente: ${concisePrompt}`,
-    "Contesto: Se il tema riguarda salute, alimentazione o fitness, evita prescrizioni mediche e invita a verificare con professionisti qualificati.",
     "Vincoli di qualita:",
     "- Linguaggio chiaro e in italiano.",
     "- Soluzione in passi numerati.",
@@ -404,6 +529,13 @@ function buildLocalFallbackPrompt(userPrompt) {
     "3. Checklist finale",
     "Domande chiarificatrici (max 3) solo se strettamente necessarie."
   ].join("\n");
+}
+
+function hasAnyKeyword(text, keywords) {
+  if (!text || !Array.isArray(keywords) || keywords.length === 0) {
+    return false;
+  }
+  return keywords.some((keyword) => text.includes(keyword));
 }
 
 function extractTextFromChoices(response) {
@@ -506,6 +638,27 @@ async function requestDirectTextFallback(prompt) {
     },
     OPENAI_TIMEOUT_WEB_SEARCH_MS,
     "OpenAI+web_search retry-empty-output"
+  );
+}
+
+async function requestModelOnlyFallback(prompt) {
+  const retryInstruction = [
+    "Genera direttamente il prompt finale ottimizzato in testo semplice.",
+    "Nessuna spiegazione extra.",
+    "Nessuna chiamata a strumenti esterni.",
+    "",
+    "Prompt di partenza:",
+    prompt
+  ].join("\n");
+
+  const boostedMaxOutputTokens = MAX_OUTPUT_TOKENS > 0
+    ? Math.max(MAX_OUTPUT_TOKENS, 1100)
+    : undefined;
+
+  return requestOpenAIWithTimeoutRetry(
+    buildBasePayload(prompt, retryInstruction, MODEL_NAME, boostedMaxOutputTokens),
+    OPENAI_TIMEOUT_WEB_SEARCH_MS,
+    "OpenAI model-only retry-empty-output"
   );
 }
 
