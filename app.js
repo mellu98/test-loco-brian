@@ -3,6 +3,8 @@
 const INPUT_STORAGE_KEY = "prompt_forge_single_input_v3";
 const DEFAULT_RESULT = "Il prompt ottimizzato apparira qui.";
 const BACKEND_TIMEOUT_MS = 160000;
+const NETWORK_RETRY_DELAYS_MS = [700, 1500];
+const API_BASE = readApiBase();
 
 const form = document.getElementById("prompt-form");
 const rawPromptInput = document.getElementById("raw-prompt");
@@ -55,27 +57,63 @@ async function improvePrompt() {
   } catch (error) {
     const fallbackPrompt = buildClientFallbackPrompt(rawPrompt);
     resultNode.textContent = fallbackPrompt;
-    const reason = error && typeof error.message === "string" && error.message.trim()
-      ? error.message.trim()
-      : "errore sconosciuto";
+    const reason = formatBackendErrorForStatus(error);
     setStatus(`Backend non disponibile (${reason}). Output generato in locale.`, false);
+    if (error) {
+      console.warn("Errore backend /api/improve:", error);
+    }
   } finally {
     setBusy(false);
   }
 }
 
 async function improveViaBackend(rawPrompt) {
+  let lastError = null;
+
+  for (let attempt = 0; attempt <= NETWORK_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      return await requestImproveViaBackend(rawPrompt);
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableBackendError(error) || attempt === NETWORK_RETRY_DELAYS_MS.length) {
+        throw error;
+      }
+      await sleep(NETWORK_RETRY_DELAYS_MS[attempt]);
+    }
+  }
+
+  throw lastError || new Error("Errore sconosciuto durante la richiesta backend.");
+}
+
+async function requestImproveViaBackend(rawPrompt) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), BACKEND_TIMEOUT_MS);
-  let response;
 
   try {
-    response = await fetch("/api/improve", {
+    const endpoint = `${API_BASE}/api/improve`;
+    const response = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ prompt: rawPrompt }),
       signal: controller.signal
     });
+
+    if (!response.ok) {
+      throw new Error(await readApiError(response));
+    }
+
+    const data = await response.json();
+    const output = typeof data?.prompt === "string" ? data.prompt.trim() : "";
+    if (!output) {
+      throw new Error("Risposta vuota dal server.");
+    }
+    return {
+      prompt: output,
+      recoveredFromEmptyOutput: Boolean(data?.recoveredFromEmptyOutput),
+      usedLocalFallback: Boolean(data?.usedLocalFallback),
+      usedNoWebRecovery: Boolean(data?.usedNoWebRecovery),
+      debugHint: formatFallbackDebugHint(data?.debug)
+    };
   } catch (error) {
     if (error && error.name === "AbortError") {
       throw new Error("Timeout: il server ha impiegato troppo tempo a rispondere.");
@@ -84,23 +122,60 @@ async function improveViaBackend(rawPrompt) {
   } finally {
     clearTimeout(timeoutId);
   }
+}
 
-  if (!response.ok) {
-    throw new Error(await readApiError(response));
+function isRetryableBackendError(error) {
+  if (!error) {
+    return false;
   }
 
-  const data = await response.json();
-  const output = typeof data?.prompt === "string" ? data.prompt.trim() : "";
-  if (!output) {
-    throw new Error("Risposta vuota dal server.");
+  const message = String(error.message || "").toLowerCase();
+  if (message.startsWith("timeout:")) {
+    return true;
   }
-  return {
-    prompt: output,
-    recoveredFromEmptyOutput: Boolean(data?.recoveredFromEmptyOutput),
-    usedLocalFallback: Boolean(data?.usedLocalFallback),
-    usedNoWebRecovery: Boolean(data?.usedNoWebRecovery),
-    debugHint: formatFallbackDebugHint(data?.debug)
-  };
+
+  return isNetworkFailureMessage(message);
+}
+
+function formatBackendErrorForStatus(error) {
+  const raw = error && typeof error.message === "string" ? error.message.trim() : "";
+  const message = raw || "errore sconosciuto";
+  const lower = message.toLowerCase();
+
+  if (isNetworkFailureMessage(lower)) {
+    if (navigator.onLine === false) {
+      return "connessione assente (offline)";
+    }
+    return "connessione al server fallita";
+  }
+
+  if (lower.startsWith("timeout:")) {
+    return "timeout del backend";
+  }
+
+  return message;
+}
+
+function isNetworkFailureMessage(message) {
+  return (
+    message.includes("load failed") ||
+    message.includes("failed to fetch") ||
+    message.includes("networkerror") ||
+    message.includes("network error")
+  );
+}
+
+function readApiBase() {
+  const meta = document.querySelector('meta[name="prompt-api-base"]');
+  const value = meta && typeof meta.content === "string" ? meta.content.trim() : "";
+  if (!value) {
+    return "";
+  }
+  return value.replace(/\/+$/, "");
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function formatFallbackDebugHint(debug) {
