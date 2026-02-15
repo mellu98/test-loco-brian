@@ -187,6 +187,20 @@ app.post("/api/improve", async (req, res) => {
 
     const status = Number(error?.status) || 502;
     const message = typeof error?.message === "string" ? error.message : "Errore chiamata OpenAI.";
+    if (prompt && status >= 500) {
+      return res.status(200).json({
+        prompt: buildLocalFallbackPrompt(prompt),
+        recoveredFromEmptyOutput: true,
+        usedWebSearch: true,
+        usedModel: MODEL_NAME,
+        usedLocalFallback: true,
+        debug: {
+          upstream_status: status,
+          upstream_error: message
+        }
+      });
+    }
+
     return res.status(status).json({ error: message });
   }
 });

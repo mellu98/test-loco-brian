@@ -53,7 +53,12 @@ async function improvePrompt() {
       setStatus("Prompt ottimizzato con web research.", false);
     }
   } catch (error) {
-    setStatus(`Errore: ${error.message}`, true);
+    const fallbackPrompt = buildClientFallbackPrompt(rawPrompt);
+    resultNode.textContent = fallbackPrompt;
+    const reason = error && typeof error.message === "string" && error.message.trim()
+      ? error.message.trim()
+      : "errore sconosciuto";
+    setStatus(`Backend non disponibile (${reason}). Output generato in locale.`, false);
   } finally {
     setBusy(false);
   }
@@ -122,6 +127,12 @@ function formatFallbackDebugHint(debug) {
   if (typeof debug.attempts === "number" && Number.isFinite(debug.attempts)) {
     parts.push(`attempts=${debug.attempts}`);
   }
+  if (typeof debug.upstream_status === "number" && Number.isFinite(debug.upstream_status)) {
+    parts.push(`upstream_status=${debug.upstream_status}`);
+  }
+  if (typeof debug.upstream_error === "string" && debug.upstream_error.trim()) {
+    parts.push(`upstream_error=${debug.upstream_error.trim().slice(0, 120)}`);
+  }
 
   return parts.join(" | ");
 }
@@ -132,7 +143,16 @@ async function readApiError(response) {
   }
 
   try {
-    const payload = await response.json();
+    const rawBody = await response.text();
+    let payload = null;
+    if (rawBody) {
+      try {
+        payload = JSON.parse(rawBody);
+      } catch (_parseError) {
+        payload = null;
+      }
+    }
+
     const message = payload?.error || payload?.message;
     if (typeof message === "string" && message.trim()) {
       if (payload?.debug && typeof payload.debug === "object") {
@@ -140,6 +160,12 @@ async function readApiError(response) {
       }
       return message;
     }
+
+    const compactBody = String(rawBody || "").replace(/\s+/g, " ").trim();
+    if (compactBody) {
+      return `HTTP ${response.status}: ${compactBody.slice(0, 220)}`;
+    }
+
     return `HTTP ${response.status}`;
   } catch (_error) {
     return `HTTP ${response.status}`;
@@ -192,6 +218,69 @@ function normalizePrompt(value) {
     .replace(/\r\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+function buildClientFallbackPrompt(userPrompt) {
+  const concisePrompt = String(userPrompt || "").replace(/\s+/g, " ").trim();
+  const lower = concisePrompt.toLowerCase();
+
+  if (hasAnyKeyword(lower, ["marketing", "brand", "ads", "social", "seo", "vendit", "funnel", "lead"])) {
+    return [
+      "Ruolo: Sei un growth marketer senior orientato ai risultati.",
+      "Obiettivo: costruire un piano marketing pratico e misurabile.",
+      `Richiesta utente: ${concisePrompt}`,
+      "Output richiesto:",
+      "1. Strategia sintetica (target, proposta di valore, canali prioritari).",
+      "2. Piano operativo 30/60/90 giorni con attivita settimanali.",
+      "3. KPI principali e soglie target.",
+      "4. Budget indicativo e priorita di investimento.",
+      "5. Rischi principali e contromisure."
+    ].join("\n");
+  }
+
+  if (hasAnyKeyword(lower, ["dieta", "alimentazione", "fitness", "allenamento", "calorie", "nutriz"])) {
+    return [
+      "Ruolo: Sei un coach alimentare educativo (non medico).",
+      "Obiettivo: proporre un piano dieta sostenibile e realistico.",
+      `Richiesta utente: ${concisePrompt}`,
+      "Output richiesto:",
+      "1. Piano pratico per 4 settimane.",
+      "2. Esempio menu settimanale semplice.",
+      "3. Lista spesa base.",
+      "4. Indicatori di monitoraggio progressi.",
+      "5. Avvertenza: per condizioni cliniche, consultare professionista."
+    ].join("\n");
+  }
+
+  if (hasAnyKeyword(lower, ["bug", "codice", "javascript", "python", "api", "server", "deploy"])) {
+    return [
+      "Ruolo: Sei un software engineer senior pragmatico.",
+      "Obiettivo: risolvere il problema tecnico in modo implementabile.",
+      `Richiesta utente: ${concisePrompt}`,
+      "Output richiesto:",
+      "1. Diagnosi rapida.",
+      "2. Piano step-by-step con comandi concreti.",
+      "3. Patch proposta.",
+      "4. Test di verifica."
+    ].join("\n");
+  }
+
+  return [
+    "Ruolo: Sei un assistente esperto e pragmatico.",
+    "Obiettivo: fornire una risposta chiara, utile e subito applicabile.",
+    `Richiesta utente: ${concisePrompt}`,
+    "Formato output:",
+    "1. Sintesi breve",
+    "2. Piano pratico a passi numerati",
+    "3. Checklist finale"
+  ].join("\n");
+}
+
+function hasAnyKeyword(text, keywords) {
+  if (!text || !Array.isArray(keywords) || keywords.length === 0) {
+    return false;
+  }
+  return keywords.some((keyword) => text.includes(keyword));
 }
 
 function setStatus(message, isError) {
