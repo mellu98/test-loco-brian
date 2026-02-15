@@ -1,6 +1,6 @@
 # Prompt Forge
 
-App web semplice: incolli un prompt grezzo, il backend lo passa a ChatGPT e restituisce un prompt molto piu specifico.
+App web semplice: incolli un prompt grezzo, il backend lo passa al provider LLM configurato e restituisce un prompt molto piu specifico.
 
 ## Release 1.0.1
 
@@ -12,7 +12,7 @@ App web semplice: incolli un prompt grezzo, il backend lo passa a ChatGPT e rest
 ## Requisiti
 
 - Node.js 18+ (consigliato 20+)
-- OpenAI API key valida
+- API key valida del provider scelto (OpenAI o DeepSeek)
 
 ## Avvio in locale
 
@@ -29,6 +29,8 @@ App web semplice: incolli un prompt grezzo, il backend lo passa a ChatGPT e rest
 
 - `OPENAI_API_KEY`: obbligatoria
 - `OPENAI_MODEL`: opzionale, default `gpt-5`
+- `OPENAI_BASE_URL`: opzionale. Per DeepSeek usa `https://api.deepseek.com`
+- `AI_PROVIDER`: opzionale. Imposta `deepseek` per forzare la modalita `chat.completions`
 - `OPENAI_TIMEOUT_WEB_SEARCH_MS`: timeout base richieste con web research, default `30000`
 - `OPENAI_TIMEOUT_RETRIES`: numero retry automatici su timeout, default `2`
 - `OPENAI_TIMEOUT_RETRY_DELTA_MS`: incremento timeout per ogni retry, default `15000`
@@ -56,8 +58,8 @@ Campi chiave:
 
 ## Web Research
 
-- La web research e sempre attiva.
-- Il backend usa sempre il modello GPT primario configurato in `OPENAI_MODEL`.
+- Con provider OpenAI (`responses` API), la web research e attiva.
+- Con provider DeepSeek (`chat.completions`), la web research built-in non e disponibile e viene usata la pipeline model-only + retry.
 - Nel frontend non c'e piu il toggle di attivazione/disattivazione.
 - Se il provider non restituisce testo anche dopo retry, il server restituisce un fallback locale per evitare errore bloccante.
 
@@ -71,8 +73,10 @@ Campi chiave:
    - Build Command: `npm install`
    - Start Command: `npm start`
 5. In `Environment Variables` aggiungi:
-   - `OPENAI_API_KEY` = tua chiave OpenAI
-   - `OPENAI_MODEL` = `gpt-5` (opzionale)
+   - `OPENAI_API_KEY` = tua chiave provider
+   - `OPENAI_MODEL` = modello provider (es. `gpt-5` oppure `deepseek-chat`)
+   - `OPENAI_BASE_URL` = vuoto per OpenAI, `https://api.deepseek.com` per DeepSeek
+   - `AI_PROVIDER` = vuoto per OpenAI, `deepseek` per DeepSeek
    - `OPENAI_TIMEOUT_WEB_SEARCH_MS` = `30000` (opzionale)
    - `OPENAI_TIMEOUT_RETRIES` = `2` (opzionale)
    - `OPENAI_TIMEOUT_RETRY_DELTA_MS` = `15000` (opzionale)

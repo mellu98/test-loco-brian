@@ -9,6 +9,8 @@ require("dotenv").config();
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
 const MODEL_NAME = process.env.OPENAI_MODEL || "gpt-5";
+const OPENAI_BASE_URL = String(process.env.OPENAI_BASE_URL || "").trim();
+const AI_PROVIDER = String(process.env.AI_PROVIDER || "").trim().toLowerCase();
 const MAX_PROMPT_LENGTH = Number(process.env.MAX_PROMPT_LENGTH || 6000);
 const OPENAI_TIMEOUT_WEB_SEARCH_MS = toPositiveInt(process.env.OPENAI_TIMEOUT_WEB_SEARCH_MS, 30000);
 const OPENAI_TIMEOUT_RETRIES = toPositiveInt(process.env.OPENAI_TIMEOUT_RETRIES, 2);
@@ -18,6 +20,12 @@ const OPENAI_POLL_MAX_WAIT_MS = toPositiveInt(process.env.OPENAI_POLL_MAX_WAIT_M
 const MAX_OUTPUT_TOKENS = toPositiveInt(process.env.MAX_OUTPUT_TOKENS, 550);
 const DEBUG_TRACE_VERSION = "2026-02-15";
 const LOG_EMPTY_OUTPUT_TRACE = process.env.LOG_EMPTY_OUTPUT_TRACE !== "0";
+const MODEL_NAME_LOWER = String(MODEL_NAME || "").toLowerCase();
+const BASE_URL_LOWER = OPENAI_BASE_URL.toLowerCase();
+const USE_CHAT_COMPLETIONS_API =
+  AI_PROVIDER === "deepseek" ||
+  MODEL_NAME_LOWER.startsWith("deepseek") ||
+  BASE_URL_LOWER.includes("deepseek.com");
 
 const SYSTEM_INSTRUCTIONS = `
 Sei un Prompt Engineer senior.
@@ -37,7 +45,10 @@ Il prompt finale deve includere:
 `.trim();
 
 const openai = process.env.OPENAI_API_KEY
-  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+  ? new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY,
+      ...(OPENAI_BASE_URL ? { baseURL: OPENAI_BASE_URL } : {})
+    })
   : null;
 
 app.use(express.json({ limit: "250kb" }));
@@ -146,7 +157,8 @@ app.post("/api/improve", async (req, res) => {
       const finalizeStartedAt = Date.now();
       const finalizedResponse = await requestFinalizeFromPreviousResponse(
         lastResponse.id,
-        finalizeReason === "max_output_tokens"
+        finalizeReason === "max_output_tokens",
+        prompt
       );
       lastResponse = finalizedResponse;
       pushDebugTrace(
@@ -195,7 +207,8 @@ app.post("/api/improve", async (req, res) => {
       const finalizeModelStartedAt = Date.now();
       const finalizedModelOnlyResponse = await requestFinalizeFromPreviousResponse(
         lastResponse.id,
-        finalizeModelReason === "max_output_tokens"
+        finalizeModelReason === "max_output_tokens",
+        prompt
       );
       lastResponse = finalizedModelOnlyResponse;
       pushDebugTrace(
@@ -321,7 +334,8 @@ app.post("/api/improve", async (req, res) => {
     }
 
     const status = Number(error?.status) || 502;
-    const message = typeof error?.message === "string" ? error.message : "Errore chiamata OpenAI.";
+    const rawMessage = typeof error?.message === "string" ? error.message : "Errore chiamata OpenAI.";
+    const message = redactSensitiveText(rawMessage);
     const errorDebug = {
       upstream_status: status,
       upstream_error: message
@@ -762,6 +776,17 @@ function toFiniteNumber(value) {
   return Math.max(0, Math.floor(parsed));
 }
 
+function redactSensitiveText(value) {
+  const text = String(value || "");
+  if (!text) {
+    return "";
+  }
+
+  return text
+    .replace(/sk-[A-Za-z0-9_-]{12,}/g, "sk-***REDACTED***")
+    .replace(/(api[_\s-]*key[^:\n]*:\s*)([^\s,;]+)/gi, "$1***REDACTED***");
+}
+
 function buildLocalFallbackPrompt(userPrompt) {
   const concisePrompt = String(userPrompt || "")
     .replace(/\s+/g, " ")
@@ -951,6 +976,23 @@ function extractTextFromChoices(response) {
 }
 
 async function createImprovementResponse(prompt) {
+  if (USE_CHAT_COMPLETIONS_API) {
+    const response = await requestChatCompletionWithTimeoutRetry(
+      buildChatCompletionPayload(
+        prompt,
+        undefined,
+        MODEL_NAME,
+        getAdaptiveMaxOutputTokens("initial")
+      ),
+      OPENAI_TIMEOUT_WEB_SEARCH_MS,
+      "Provider chat.completions initial"
+    );
+
+    return {
+      response
+    };
+  }
+
   const basePayload = buildBasePayload(
     prompt,
     undefined,
@@ -1005,6 +1047,29 @@ function buildBasePayload(prompt, userInstructionText, modelName, maxOutputToken
   return payload;
 }
 
+function buildChatCompletionPayload(prompt, userInstructionText, modelName, maxOutputTokensOverride) {
+  const payload = {
+    model: modelName || MODEL_NAME,
+    messages: [
+      { role: "system", content: SYSTEM_INSTRUCTIONS },
+      {
+        role: "user",
+        content: userInstructionText || `Migliora questo prompt rendendolo specifico e operativo:\n\n${prompt}`
+      }
+    ]
+  };
+
+  const maxOutputTokens = Number.isFinite(maxOutputTokensOverride)
+    ? Math.floor(maxOutputTokensOverride)
+    : MAX_OUTPUT_TOKENS;
+
+  if (maxOutputTokens > 0) {
+    payload.max_tokens = maxOutputTokens;
+  }
+
+  return payload;
+}
+
 async function requestDirectTextFallback(prompt, isTokenLimited) {
   const retryInstruction = [
     "Genera direttamente il prompt finale ottimizzato in testo semplice.",
@@ -1020,6 +1085,19 @@ async function requestDirectTextFallback(prompt, isTokenLimited) {
   const boostedMaxOutputTokens = getAdaptiveMaxOutputTokens(
     isTokenLimited ? "token_pressure" : "retry"
   );
+
+  if (USE_CHAT_COMPLETIONS_API) {
+    return requestChatCompletionWithTimeoutRetry(
+      buildChatCompletionPayload(
+        prompt,
+        retryInstruction,
+        MODEL_NAME,
+        boostedMaxOutputTokens
+      ),
+      OPENAI_TIMEOUT_WEB_SEARCH_MS,
+      "Provider chat.completions retry-empty-output"
+    );
+  }
 
   return requestOpenAIWithTimeoutRetry(
     {
@@ -1048,6 +1126,19 @@ async function requestModelOnlyFallback(prompt, isTokenLimited) {
     isTokenLimited ? "token_pressure" : "retry"
   );
 
+  if (USE_CHAT_COMPLETIONS_API) {
+    return requestChatCompletionWithTimeoutRetry(
+      buildChatCompletionPayload(
+        prompt,
+        retryInstruction,
+        MODEL_NAME,
+        boostedMaxOutputTokens
+      ),
+      OPENAI_TIMEOUT_WEB_SEARCH_MS,
+      "Provider chat.completions model-only retry-empty-output"
+    );
+  }
+
   return requestOpenAIWithTimeoutRetry(
     buildBasePayload(prompt, retryInstruction, MODEL_NAME, boostedMaxOutputTokens),
     OPENAI_TIMEOUT_WEB_SEARCH_MS,
@@ -1069,7 +1160,11 @@ async function requestOpenAI(payload, timeoutMs, label) {
   return waitForResponseCompletion(created, label);
 }
 
-async function requestFinalizeFromPreviousResponse(previousResponseId, isTokenLimited) {
+async function requestChatCompletion(payload, timeoutMs, label) {
+  return withTimeout(openai.chat.completions.create(payload), timeoutMs, label);
+}
+
+async function requestFinalizeFromPreviousResponse(previousResponseId, isTokenLimited, prompt) {
   const finalizeInstruction = [
     "Usa i risultati gia raccolti e restituisci ORA solo il prompt finale ottimizzato.",
     "Output testuale puro, nessuna introduzione e nessuna spiegazione.",
@@ -1077,6 +1172,26 @@ async function requestFinalizeFromPreviousResponse(previousResponseId, isTokenLi
       ? "Formato compatto: massimo 12 righe operative."
       : "Mantieni il testo conciso e operativo."
   ].join("\n");
+
+  if (USE_CHAT_COMPLETIONS_API) {
+    const finalizePrompt = [
+      finalizeInstruction,
+      "",
+      "Prompt di partenza:",
+      prompt
+    ].join("\n");
+
+    return requestChatCompletionWithTimeoutRetry(
+      buildChatCompletionPayload(
+        prompt,
+        finalizePrompt,
+        MODEL_NAME,
+        getAdaptiveMaxOutputTokens(isTokenLimited ? "token_pressure" : "retry")
+      ),
+      OPENAI_TIMEOUT_WEB_SEARCH_MS,
+      "Provider chat.completions finalize-fallback"
+    );
+  }
 
   return requestOpenAIWithTimeoutRetry(
     {
@@ -1152,13 +1267,21 @@ function sleep(ms) {
 }
 
 async function requestOpenAIWithTimeoutRetry(payload, firstTimeoutMs, label) {
+  return requestWithTimeoutRetry(requestOpenAI, payload, firstTimeoutMs, label);
+}
+
+async function requestChatCompletionWithTimeoutRetry(payload, firstTimeoutMs, label) {
+  return requestWithTimeoutRetry(requestChatCompletion, payload, firstTimeoutMs, label);
+}
+
+async function requestWithTimeoutRetry(requestFn, payload, firstTimeoutMs, label) {
   let timeoutMs = firstTimeoutMs;
   let lastTimeoutError = null;
 
   for (let attempt = 0; attempt <= OPENAI_TIMEOUT_RETRIES; attempt += 1) {
     const attemptLabel = attempt === 0 ? label : `${label} retry-${attempt}`;
     try {
-      return await requestOpenAI(payload, timeoutMs, attemptLabel);
+      return await requestFn(payload, timeoutMs, attemptLabel);
     } catch (error) {
       if (!isTimeoutError(error)) {
         throw error;
