@@ -12,6 +12,8 @@ const MAX_PROMPT_LENGTH = Number(process.env.MAX_PROMPT_LENGTH || 6000);
 const DEFAULT_USE_WEB_SEARCH = process.env.OPENAI_USE_WEB_SEARCH === "true";
 const OPENAI_TIMEOUT_NO_WEB_MS = toPositiveInt(process.env.OPENAI_TIMEOUT_NO_WEB_MS, 18000);
 const OPENAI_TIMEOUT_WEB_SEARCH_MS = toPositiveInt(process.env.OPENAI_TIMEOUT_WEB_SEARCH_MS, 12000);
+const OPENAI_TIMEOUT_RETRIES = toPositiveInt(process.env.OPENAI_TIMEOUT_RETRIES, 1);
+const OPENAI_TIMEOUT_RETRY_DELTA_MS = toPositiveInt(process.env.OPENAI_TIMEOUT_RETRY_DELTA_MS, 12000);
 const MAX_OUTPUT_TOKENS = toPositiveInt(process.env.MAX_OUTPUT_TOKENS, 0);
 
 const SYSTEM_INSTRUCTIONS = `
@@ -101,8 +103,9 @@ app.post("/api/improve", async (req, res) => {
     if (isTimeoutError(error)) {
       const timeoutMs = Number(error?.timeoutMs) || OPENAI_TIMEOUT_NO_WEB_MS;
       const label = typeof error?.label === "string" ? error.label : "OpenAI";
+      const attempts = Number(error?.attempts) || 1;
       return res.status(504).json({
-        error: `Timeout ${label} dopo ${timeoutMs}ms. Riprova senza web research o riduci il prompt.`
+        error: `Timeout ${label} dopo ${timeoutMs}ms (tentativi: ${attempts}). Riprova senza web research o riduci il prompt.`
       });
     }
 
@@ -252,7 +255,11 @@ async function createImprovementResponse(prompt, useWebSearch) {
 
   if (!useWebSearch) {
     return {
-      response: await requestOpenAI(basePayload, OPENAI_TIMEOUT_NO_WEB_MS, "OpenAI"),
+      response: await requestOpenAIWithTimeoutRetry(
+        basePayload,
+        OPENAI_TIMEOUT_NO_WEB_MS,
+        "OpenAI"
+      ),
       usedWebSearch: false,
       fallbackToNoWebSearch: false
     };
@@ -274,7 +281,11 @@ async function createImprovementResponse(prompt, useWebSearch) {
   } catch (error) {
     if (isWebSearchUnsupported(error) || isTimeoutError(error)) {
       return {
-        response: await requestOpenAI(basePayload, OPENAI_TIMEOUT_NO_WEB_MS, "OpenAI fallback"),
+        response: await requestOpenAIWithTimeoutRetry(
+          basePayload,
+          OPENAI_TIMEOUT_NO_WEB_MS,
+          "OpenAI fallback"
+        ),
         usedWebSearch: false,
         fallbackToNoWebSearch: true
       };
@@ -319,7 +330,7 @@ async function requestDirectTextFallback(prompt) {
     prompt
   ].join("\n");
 
-  return requestOpenAI(
+  return requestOpenAIWithTimeoutRetry(
     buildBasePayload(prompt, retryInstruction),
     OPENAI_TIMEOUT_NO_WEB_MS,
     "OpenAI retry-empty-output"
@@ -345,6 +356,37 @@ function isTimeoutError(error) {
 
 async function requestOpenAI(payload, timeoutMs, label) {
   return withTimeout(openai.responses.create(payload), timeoutMs, label);
+}
+
+async function requestOpenAIWithTimeoutRetry(payload, firstTimeoutMs, label) {
+  let timeoutMs = firstTimeoutMs;
+  let lastTimeoutError = null;
+
+  for (let attempt = 0; attempt <= OPENAI_TIMEOUT_RETRIES; attempt += 1) {
+    const attemptLabel = attempt === 0 ? label : `${label} retry-${attempt}`;
+    try {
+      return await requestOpenAI(payload, timeoutMs, attemptLabel);
+    } catch (error) {
+      if (!isTimeoutError(error)) {
+        throw error;
+      }
+
+      lastTimeoutError = error;
+      if (attempt === OPENAI_TIMEOUT_RETRIES) {
+        lastTimeoutError.attempts = OPENAI_TIMEOUT_RETRIES + 1;
+        throw lastTimeoutError;
+      }
+
+      timeoutMs += OPENAI_TIMEOUT_RETRY_DELTA_MS;
+    }
+  }
+
+  if (lastTimeoutError) {
+    lastTimeoutError.attempts = OPENAI_TIMEOUT_RETRIES + 1;
+    throw lastTimeoutError;
+  }
+
+  throw new Error(`${label} failed without timeout details.`);
 }
 
 async function withTimeout(promise, timeoutMs, label) {

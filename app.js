@@ -3,7 +3,7 @@
 const INPUT_STORAGE_KEY = "prompt_forge_single_input_v3";
 const WEB_SEARCH_STORAGE_KEY = "prompt_forge_use_web_search_v1";
 const DEFAULT_RESULT = "Il prompt ottimizzato apparira qui.";
-const BACKEND_TIMEOUT_MS = 32000;
+const BACKEND_TIMEOUT_MS = 70000;
 
 const form = document.getElementById("prompt-form");
 const rawPromptInput = document.getElementById("raw-prompt");
