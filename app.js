@@ -99,6 +99,9 @@ async function readApiError(response) {
     const payload = await response.json();
     const message = payload?.error || payload?.message;
     if (typeof message === "string" && message.trim()) {
+      if (payload?.debug && typeof payload.debug === "object") {
+        return `${message} [debug: ${JSON.stringify(payload.debug)}]`;
+      }
       return message;
     }
     return `HTTP ${response.status}`;
